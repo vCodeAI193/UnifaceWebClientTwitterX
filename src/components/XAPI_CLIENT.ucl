@@ -1,0 +1,326 @@
+; =============================================================================
+; Component : XAPI_CLIENT
+; Purpose   : Main orchestrator and sole public entry point for the
+;             X/Twitter API v2 Uniface Web Client.
+;
+;             External callers (DSP forms, batch processes, other components)
+;             should only activate operations on this component — never on
+;             the domain components (XAPI_TWEETS, XAPI_USERS) directly.
+;
+; Initialization sequence (must be followed):
+;   1. activate XAPI_CLIENT INITIALIZE (p_config_file, p_error)
+;      — reads xapi.ini, initializes all child components in order:
+;        XAPI_LOGGER → XAPI_HTTP_CLIENT → XAPI_TWEETS + XAPI_USERS
+;
+;   2. Use any public operation:
+;      activate XAPI_CLIENT GET_TWEET          (...)
+;      activate XAPI_CLIENT CREATE_TWEET       (...)
+;      activate XAPI_CLIENT SEARCH_TWEETS      (...)
+;      activate XAPI_CLIENT GET_USER_BY_ID     (...)
+;      activate XAPI_CLIENT GET_USER_BY_USERNAME(...)
+;
+;   3. activate XAPI_CLIENT SHUTDOWN
+;      — flushes and closes the log file, resets state.
+;
+; Dependencies: XAPI_LOGGER, XAPI_HTTP_CLIENT, XAPI_TWEETS, XAPI_USERS
+; =============================================================================
+component XAPI_CLIENT
+
+  ; ---- Child component logical names (set during INITIALIZE) ---------------
+  PUBLIC string  v_logger         ; = "XAPI_LOGGER"
+  PUBLIC string  v_http_client    ; = "XAPI_HTTP_CLIENT"
+  PUBLIC string  v_tweets         ; = "XAPI_TWEETS"
+  PUBLIC string  v_users          ; = "XAPI_USERS"
+
+  ; ---- Configuration values read from xapi.ini ----------------------------
+  PUBLIC string  v_bearer_token
+  PUBLIC string  v_base_url
+  PUBLIC string  v_log_dir
+  PUBLIC string  v_log_file
+  PUBLIC numeric v_log_level
+
+  ; ---- State guard ---------------------------------------------------------
+  PUBLIC numeric v_initialized    ; 1 = ready, 0 = not yet initialized
+
+
+; -----------------------------------------------------------------------------
+; Operation : INITIALIZE
+; Purpose   : Reads configuration from xapi.ini, then initializes all child
+;             components in dependency order. Idempotent: safe to call twice.
+; Parameters:
+;   in  p_config_file : full path to xapi.ini
+;                       Pass "" to fall back to XAPICONF assignment in asn.ini.
+;   out p_error       : "" on success; non-empty error message on failure.
+;                       Caller must check p_error before proceeding.
+; -----------------------------------------------------------------------------
+operation INITIALIZE
+  parameters
+    in  string p_config_file
+    out string p_error
+  endparameters
+
+  variables
+    string  v_ini_path
+    string  v_log_level_str
+  endvariables
+
+  p_error = ""
+
+  ; Idempotent guard — do nothing if already initialized
+  if v_initialized = 1
+    return
+  endif
+
+  ; --- Determine config file path -------------------------------------------
+  v_ini_path = p_config_file
+  if v_ini_path = ""
+    ; Read XAPICONF assignment from asn.ini via Uniface $assignment() built-in
+    v_ini_path = $assignment("XAPICONF")
+  endif
+
+  if v_ini_path = ""
+    p_error = "XAPI_CLIENT.INITIALIZE: cannot determine xapi.ini path. " +
+              "Pass the path as parameter or set XAPICONF= in asn.ini."
+    return
+  endif
+
+  ; --- Read xapi.ini using $getconfigkey(section, key, filepath) ------------
+  v_bearer_token  = $getconfigkey("XAPI",    "BEARER_TOKEN", v_ini_path)
+  v_base_url      = $getconfigkey("XAPI",    "BASE_URL",     v_ini_path)
+  v_log_level_str = $getconfigkey("LOGGING", "LOG_LEVEL",    v_ini_path)
+  v_log_file      = $getconfigkey("LOGGING", "LOG_FILE",     v_ini_path)
+
+  ; Read log directory from asn.ini LOGDIR assignment
+  v_log_dir = $assignment("LOGDIR")
+
+  ; Apply defaults for optional settings
+  if v_base_url = ""
+    v_base_url = "https://api.twitter.com/2"
+  endif
+  if v_log_file = ""
+    v_log_file = "xapi_client.log"
+  endif
+  if v_log_level_str = ""
+    v_log_level_str = "1"
+  endif
+  v_log_level = numeric(v_log_level_str)
+
+  ; Bearer Token is mandatory — fail fast
+  if v_bearer_token = ""
+    p_error = "XAPI_CLIENT.INITIALIZE: BEARER_TOKEN is missing from " + v_ini_path
+    return
+  endif
+
+  ; --- Set component instance names -----------------------------------------
+  v_logger      = "XAPI_LOGGER"
+  v_http_client = "XAPI_HTTP_CLIENT"
+  v_tweets      = "XAPI_TWEETS"
+  v_users       = "XAPI_USERS"
+
+  ; --- Initialize LOGGER first (all other components depend on it) ----------
+  activate (v_logger) INIT (v_log_dir, v_log_file, v_log_level)
+
+  activate (v_logger) LOG_INFO ("XAPI_CLIENT: starting initialization.")
+  activate (v_logger) LOG_INFO ("XAPI_CLIENT: config=" + v_ini_path)
+  activate (v_logger) LOG_INFO ("XAPI_CLIENT: base_url=" + v_base_url)
+  activate (v_logger) LOG_INFO ("XAPI_CLIENT: log_level=" + v_log_level_str)
+
+  ; --- Initialize HTTP client -----------------------------------------------
+  activate (v_http_client) SET_CONFIG (v_bearer_token, v_base_url, v_logger)
+
+  ; --- Initialize domain components -----------------------------------------
+  activate (v_tweets) SET_DEPS (v_http_client, v_logger)
+  activate (v_users)  SET_DEPS (v_http_client, v_logger)
+
+  v_initialized = 1
+
+  activate (v_logger) LOG_INFO ("XAPI_CLIENT: initialization complete — ready.")
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : SHUTDOWN
+; Purpose   : Closes the log file and resets state.
+;             Call before process exit or when the client is no longer needed.
+; -----------------------------------------------------------------------------
+operation SHUTDOWN
+
+  if v_initialized = 0
+    return
+  endif
+
+  activate (v_logger) LOG_INFO ("XAPI_CLIENT: shutting down.")
+  activate (v_logger) CLOSE_LOG
+
+  v_initialized = 0
+
+end operation
+
+
+; =============================================================================
+; Public API operations — thin wrappers that guard initialization and delegate
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; Operation : GET_TWEET
+; Delegates to XAPI_TWEETS.GET_TWEET
+; Parameters:
+;   in  p_tweet_id  : tweet ID string
+;   out p_resp_json : raw JSON response
+;   out p_status    : HTTP status code
+;   out p_error     : error message, "" on success
+; -----------------------------------------------------------------------------
+operation GET_TWEET
+  parameters
+    in  string  p_tweet_id
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if v_initialized = 0
+    p_error = "XAPI_CLIENT not initialized — call INITIALIZE first."
+    return
+  endif
+
+  activate (v_tweets) GET_TWEET (p_tweet_id, p_resp_json, p_status, p_error)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : CREATE_TWEET
+; Delegates to XAPI_TWEETS.CREATE_TWEET
+; Parameters:
+;   in  p_text      : tweet text (max 280 chars)
+;   in  p_reply_to  : tweet ID to reply to, "" for standalone tweet
+;   out p_resp_json : raw JSON response (includes new tweet id)
+;   out p_status    : HTTP status code (201 = created)
+;   out p_error     : error message, "" on success
+; -----------------------------------------------------------------------------
+operation CREATE_TWEET
+  parameters
+    in  string  p_text
+    in  string  p_reply_to
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if v_initialized = 0
+    p_error = "XAPI_CLIENT not initialized — call INITIALIZE first."
+    return
+  endif
+
+  activate (v_logger) LOG_INFO ("XAPI_CLIENT: CREATE_TWEET requested.")
+  activate (v_tweets) CREATE_TWEET (p_text, p_reply_to, p_resp_json, p_status, p_error)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : SEARCH_TWEETS
+; Delegates to XAPI_TWEETS.SEARCH_TWEETS
+; Parameters:
+;   in  p_query       : X search query string
+;   in  p_max_results : results per page (10–100)
+;   in  p_next_token  : pagination token from previous response, "" to start
+;   out p_resp_json   : raw JSON response (data array + pagination meta)
+;   out p_status      : HTTP status code
+;   out p_error       : error message, "" on success
+; -----------------------------------------------------------------------------
+operation SEARCH_TWEETS
+  parameters
+    in  string  p_query
+    in  numeric p_max_results
+    in  string  p_next_token
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if v_initialized = 0
+    p_error = "XAPI_CLIENT not initialized — call INITIALIZE first."
+    return
+  endif
+
+  activate (v_tweets) SEARCH_TWEETS (p_query, p_max_results, p_next_token, p_resp_json, p_status, p_error)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : GET_USER_BY_ID
+; Delegates to XAPI_USERS.GET_USER_BY_ID
+; Parameters:
+;   in  p_user_id   : numeric user ID string
+;   out p_resp_json : raw JSON response with user object
+;   out p_status    : HTTP status code
+;   out p_error     : error message, "" on success
+; -----------------------------------------------------------------------------
+operation GET_USER_BY_ID
+  parameters
+    in  string  p_user_id
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if v_initialized = 0
+    p_error = "XAPI_CLIENT not initialized — call INITIALIZE first."
+    return
+  endif
+
+  activate (v_users) GET_USER_BY_ID (p_user_id, p_resp_json, p_status, p_error)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : GET_USER_BY_USERNAME
+; Delegates to XAPI_USERS.GET_USER_BY_USERNAME
+; Parameters:
+;   in  p_username  : X @handle without "@" (e.g. "XDevelopers")
+;   out p_resp_json : raw JSON response with user object
+;   out p_status    : HTTP status code
+;   out p_error     : error message, "" on success
+; -----------------------------------------------------------------------------
+operation GET_USER_BY_USERNAME
+  parameters
+    in  string  p_username
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if v_initialized = 0
+    p_error = "XAPI_CLIENT not initialized — call INITIALIZE first."
+    return
+  endif
+
+  activate (v_users) GET_USER_BY_USERNAME (p_username, p_resp_json, p_status, p_error)
+
+end operation
+
+end component

@@ -1,0 +1,196 @@
+; =============================================================================
+; Component : XAPI_LOGGER
+; Purpose   : Centralized file-based logger for the X API Web Client.
+;             Supports three log levels:
+;               0 = TRACE  (most verbose)
+;               1 = INFO
+;               2 = ERROR
+;
+; Usage:
+;   1. activate XAPI_LOGGER INIT      (p_log_dir, p_log_file, p_min_level)
+;   2. activate XAPI_LOGGER LOG_TRACE (p_message)
+;   3. activate XAPI_LOGGER LOG_INFO  (p_message)
+;   4. activate XAPI_LOGGER LOG_ERROR (p_message)
+;   5. activate XAPI_LOGGER CLOSE_LOG
+;
+; Dependencies: none
+; =============================================================================
+component XAPI_LOGGER
+
+  ; ---- Component-level PUBLIC variables (shared across all operations) -----
+  ; File handle logical name — kept open across calls to avoid open/close overhead
+  PUBLIC string  v_log_file       ; Full filesystem path to the log file
+  PUBLIC numeric v_min_level      ; Minimum level written: 0=TRACE, 1=INFO, 2=ERROR
+  PUBLIC numeric v_log_open       ; Guard: 1 = file handle open, 0 = closed
+  PUBLIC string  v_log_dir        ; Log directory path (from asn.ini LOGDIR)
+
+
+; -----------------------------------------------------------------------------
+; Operation : INIT
+; Purpose   : Opens the log file and writes a startup banner.
+;             Must be called once before any LOG_* operation.
+; Parameters:
+;   in p_log_dir   : directory path for log files (from asn.ini LOGDIR)
+;   in p_log_file  : log file name  (from xapi.ini LOG_FILE)
+;   in p_min_level : numeric level threshold (from xapi.ini LOG_LEVEL)
+; -----------------------------------------------------------------------------
+operation INIT
+  parameters
+    in string  p_log_dir
+    in string  p_log_file
+    in numeric p_min_level
+  endparameters
+
+  variables
+    string  v_full_path
+    string  v_ts
+    string  v_banner
+  endvariables
+
+  v_log_dir   = p_log_dir
+  v_min_level = p_min_level
+
+  ; Build full path: directory + separator + filename
+  v_full_path = p_log_dir + "/" + p_log_file
+  v_log_file  = v_full_path
+
+  ; Open log file in append + text mode (creates file if it does not exist)
+  open LOGFILE file v_log_file append text
+
+  v_log_open = 1
+
+  ; Write startup banner so each session is clearly delimited in the log
+  v_ts     = $datetime
+  v_banner = "================================================================="
+  write LOGFILE v_banner
+  write LOGFILE "[" + v_ts + "] [INFO ] XAPI_LOGGER started. level=" + string(p_min_level) + " file=" + v_full_path
+  write LOGFILE v_banner
+
+  ; Also emit to Uniface trace facility for IDE/debugger visibility
+  trace "XAPI_LOGGER INIT: log=" + v_full_path + " min_level=" + string(p_min_level)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : WRITE_ENTRY  (internal helper — not called from outside)
+; Purpose   : Performs level check, formats the log line, writes to file
+;             and to the Uniface trace facility.
+; Parameters:
+;   in p_level_num : numeric level of this message (0/1/2)
+;   in p_level_str : display label — "TRACE", "INFO ", "ERROR" (5 chars, padded)
+;   in p_message   : log message text
+; -----------------------------------------------------------------------------
+operation WRITE_ENTRY
+  parameters
+    in numeric p_level_num
+    in string  p_level_str
+    in string  p_message
+  endparameters
+
+  variables
+    string  v_ts
+    string  v_line
+  endvariables
+
+  ; Level filter: discard messages below the configured minimum
+  if p_level_num < v_min_level
+    return
+  endif
+
+  if v_log_open = 0
+    ; Safety fallback: log file not open — emit to trace only
+    trace "XAPI_LOGGER WARNING: log file not open. msg=" + p_message
+    return
+  endif
+
+  v_ts   = $datetime
+  v_line = "[" + v_ts + "] [" + p_level_str + "] " + p_message
+
+  write LOGFILE v_line
+
+  ; Mirror to Uniface trace facility (visible in IDE output and uniface_trace.log)
+  trace v_line
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : LOG_TRACE
+; Purpose   : Writes a TRACE-level message.
+;             Filtered out when v_min_level > 0.
+; Parameters:
+;   in p_message : message text
+; -----------------------------------------------------------------------------
+operation LOG_TRACE
+  parameters
+    in string p_message
+  endparameters
+
+  activate WRITE_ENTRY (0, "TRACE", p_message)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : LOG_INFO
+; Purpose   : Writes an INFO-level message.
+;             Filtered out when v_min_level > 1.
+; Parameters:
+;   in p_message : message text
+; -----------------------------------------------------------------------------
+operation LOG_INFO
+  parameters
+    in string p_message
+  endparameters
+
+  activate WRITE_ENTRY (1, "INFO ", p_message)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : LOG_ERROR
+; Purpose   : Writes an ERROR-level message.
+;             Always written regardless of v_min_level (level 2 = max threshold).
+; Parameters:
+;   in p_message : message text
+; -----------------------------------------------------------------------------
+operation LOG_ERROR
+  parameters
+    in string p_message
+  endparameters
+
+  activate WRITE_ENTRY (2, "ERROR", p_message)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : CLOSE_LOG
+; Purpose   : Writes a shutdown banner and closes the log file handle.
+;             Call from XAPI_CLIENT.SHUTDOWN before process exit.
+; -----------------------------------------------------------------------------
+operation CLOSE_LOG
+
+  variables
+    string v_ts
+    string v_line
+  endvariables
+
+  if v_log_open = 1
+    v_ts   = $datetime
+    v_line = "[" + v_ts + "] [INFO ] XAPI_LOGGER: session closed."
+    write LOGFILE v_line
+    write LOGFILE "================================================================="
+
+    close LOGFILE
+
+    v_log_open = 0
+  endif
+
+  trace "XAPI_LOGGER CLOSE_LOG: log file closed."
+
+end operation
+
+end component

@@ -1,0 +1,145 @@
+; =============================================================================
+; Component : XAPI_USERS
+; Purpose   : User lookup operations against X/Twitter API v2.
+;             Supports lookup by numeric user ID and by username (@handle).
+;
+; API Endpoints:
+;   GET /2/users/{id}                  — GET_USER_BY_ID
+;   GET /2/users/by/username/{username} — GET_USER_BY_USERNAME
+;
+; Usage:
+;   1. activate XAPI_USERS SET_DEPS             (p_http_client, p_logger)
+;   2. activate XAPI_USERS GET_USER_BY_ID       (p_user_id,  p_resp_json, p_status, p_error)
+;   3. activate XAPI_USERS GET_USER_BY_USERNAME (p_username, p_resp_json, p_status, p_error)
+;
+; Dependencies: XAPI_HTTP_CLIENT, XAPI_LOGGER
+; =============================================================================
+component XAPI_USERS
+
+  ; ---- Component-level PUBLIC variables ------------------------------------
+  PUBLIC string v_http_client   ; Logical name of the XAPI_HTTP_CLIENT instance
+  PUBLIC string v_logger        ; Logical name of the XAPI_LOGGER instance
+
+
+; -----------------------------------------------------------------------------
+; Operation : SET_DEPS
+; Purpose   : Dependency injection — wires in the HTTP client and logger.
+;             Called by XAPI_CLIENT.INITIALIZE before first use.
+; Parameters:
+;   in p_http_client : component name of active XAPI_HTTP_CLIENT instance
+;   in p_logger      : component name of active XAPI_LOGGER instance
+; -----------------------------------------------------------------------------
+operation SET_DEPS
+  parameters
+    in string p_http_client
+    in string p_logger
+  endparameters
+
+  v_http_client = p_http_client
+  v_logger      = p_logger
+
+  activate (v_logger) LOG_INFO ("XAPI_USERS: dependencies configured.")
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : GET_USER_BY_ID
+; Purpose   : Retrieves a user profile by their numeric X user ID.
+; Endpoint  : GET /2/users/{id}
+;             Requests: name, username, description, public_metrics,
+;                       profile_image_url, created_at, verified
+; Parameters:
+;   in  p_user_id   : numeric user ID string (e.g. "2244994945")
+;   out p_resp_json : raw JSON response with the user data object
+;   out p_status    : HTTP status code (200 = success)
+;   out p_error     : error message if status != 200, "" on success
+; -----------------------------------------------------------------------------
+operation GET_USER_BY_ID
+  parameters
+    in  string  p_user_id
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  variables
+    string v_path
+    string v_query
+  endvariables
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if p_user_id = ""
+    p_error = "GET_USER_BY_ID: p_user_id is required"
+    activate (v_logger) LOG_ERROR (p_error)
+    return
+  endif
+
+  v_path  = "/users/" + p_user_id
+  v_query = "user.fields=name,username,description,public_metrics,profile_image_url,created_at,verified"
+
+  activate (v_logger) LOG_INFO ("GET_USER_BY_ID: id=" + p_user_id)
+
+  activate (v_http_client) DO_GET (v_path, v_query, p_status, p_resp_json, p_error)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : GET_USER_BY_USERNAME
+; Purpose   : Retrieves a user profile by their X @handle (username).
+; Endpoint  : GET /2/users/by/username/{username}
+;             Requests: name, username, description, public_metrics,
+;                       profile_image_url, created_at, verified
+; Parameters:
+;   in  p_username  : X handle WITHOUT leading "@" (e.g. "XDevelopers")
+;                     A leading "@" is stripped defensively if present.
+;   out p_resp_json : raw JSON response with the user data object
+;   out p_status    : HTTP status code (200 = success)
+;   out p_error     : error message if status != 200, "" on success
+; -----------------------------------------------------------------------------
+operation GET_USER_BY_USERNAME
+  parameters
+    in  string  p_username
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  variables
+    string  v_path
+    string  v_query
+    string  v_clean_name
+    numeric v_len
+  endvariables
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if p_username = ""
+    p_error = "GET_USER_BY_USERNAME: p_username is required"
+    activate (v_logger) LOG_ERROR (p_error)
+    return
+  endif
+
+  ; Strip leading "@" if caller included it
+  v_clean_name = p_username
+  if $substr(v_clean_name, 1, 1) = "@"
+    v_len        = $length(v_clean_name)
+    v_clean_name = $substr(v_clean_name, 2, v_len - 1)
+  endif
+
+  v_path  = "/users/by/username/" + v_clean_name
+  v_query = "user.fields=name,username,description,public_metrics,profile_image_url,created_at,verified"
+
+  activate (v_logger) LOG_INFO ("GET_USER_BY_USERNAME: username=" + v_clean_name)
+
+  activate (v_http_client) DO_GET (v_path, v_query, p_status, p_resp_json, p_error)
+
+end operation
+
+end component

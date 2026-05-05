@@ -1,0 +1,263 @@
+; =============================================================================
+; Component : XAPI_TWEETS
+; Purpose   : Tweet-level operations against X/Twitter API v2.
+;             Covers reading single tweets, creating tweets and searching
+;             recent tweets (last 7 days on Basic tier, 30 days on Academic).
+;
+; API Endpoints:
+;   GET  /2/tweets/{id}             — GET_TWEET
+;   POST /2/tweets                  — CREATE_TWEET
+;   GET  /2/tweets/search/recent    — SEARCH_TWEETS
+;
+; Usage:
+;   1. activate XAPI_TWEETS SET_DEPS     (p_http_client, p_logger)
+;   2. activate XAPI_TWEETS GET_TWEET    (p_tweet_id, p_resp_json, p_status, p_error)
+;   3. activate XAPI_TWEETS CREATE_TWEET (p_text, p_reply_to, p_resp_json, p_status, p_error)
+;   4. activate XAPI_TWEETS SEARCH_TWEETS(p_query, p_max_results, p_next_token, p_resp_json, p_status, p_error)
+;
+; Dependencies: XAPI_HTTP_CLIENT, XAPI_LOGGER
+; =============================================================================
+component XAPI_TWEETS
+
+  ; ---- Component-level PUBLIC variables ------------------------------------
+  PUBLIC string v_http_client   ; Logical name of the XAPI_HTTP_CLIENT instance
+  PUBLIC string v_logger        ; Logical name of the XAPI_LOGGER instance
+
+
+; -----------------------------------------------------------------------------
+; Operation : SET_DEPS
+; Purpose   : Dependency injection — wires in the HTTP client and logger.
+;             Called by XAPI_CLIENT.INITIALIZE before first use.
+; Parameters:
+;   in p_http_client : component name of active XAPI_HTTP_CLIENT instance
+;   in p_logger      : component name of active XAPI_LOGGER instance
+; -----------------------------------------------------------------------------
+operation SET_DEPS
+  parameters
+    in string p_http_client
+    in string p_logger
+  endparameters
+
+  v_http_client = p_http_client
+  v_logger      = p_logger
+
+  activate (v_logger) LOG_INFO ("XAPI_TWEETS: dependencies configured.")
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : ESCAPE_JSON_STRING  (internal helper)
+; Purpose   : Escapes a string for safe embedding inside a JSON string value.
+;             Handles the characters most likely to appear in tweet text.
+;             ProcScript replace() modifies the variable in-place.
+; Parameters:
+;   io p_str : string to escape (modified in-place)
+; -----------------------------------------------------------------------------
+operation ESCAPE_JSON_STRING
+  parameters
+    io string p_str
+  endparameters
+
+  ; Backslash must be escaped first to avoid double-escaping other replacements
+  replace p_str, "\", "\\"
+  replace p_str, '"', '\"'
+  replace p_str, "/n", "\\n"
+  replace p_str, "/r", "\\r"
+  replace p_str, "/t", "\\t"
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : GET_TWEET
+; Purpose   : Retrieves a single tweet by its ID.
+; Endpoint  : GET /2/tweets/{id}
+;             Requests tweet.fields=created_at,author_id,text,public_metrics
+;             and expands author_id to the user object.
+; Parameters:
+;   in  p_tweet_id  : tweet ID string (e.g. "1234567890123456789")
+;   out p_resp_json : raw JSON response from API
+;   out p_status    : HTTP status code (200 = success)
+;   out p_error     : error message if status != 200, "" on success
+; -----------------------------------------------------------------------------
+operation GET_TWEET
+  parameters
+    in  string  p_tweet_id
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  variables
+    string v_path
+    string v_query
+  endvariables
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if p_tweet_id = ""
+    p_error = "GET_TWEET: p_tweet_id is required"
+    activate (v_logger) LOG_ERROR (p_error)
+    return
+  endif
+
+  v_path  = "/tweets/" + p_tweet_id
+  v_query = "tweet.fields=created_at,author_id,text,public_metrics"
+  v_query = v_query + "&expansions=author_id"
+  v_query = v_query + "&user.fields=name,username"
+
+  activate (v_logger) LOG_INFO ("GET_TWEET: id=" + p_tweet_id)
+
+  activate (v_http_client) DO_GET (v_path, v_query, p_status, p_resp_json, p_error)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : CREATE_TWEET
+; Purpose   : Posts a new tweet (or a reply to an existing tweet).
+; Endpoint  : POST /2/tweets
+;
+; IMPORTANT: This endpoint requires OAuth 2.0 with user context (write scope)
+;            or OAuth 1.0a User Access Token. App-Only Bearer Token is NOT
+;            sufficient for creating tweets. Configure the appropriate
+;            credentials in XAPI_HTTP_CLIENT.BUILD_AUTH_HEADERS for writes.
+;
+; Parameters:
+;   in  p_text      : tweet text (max 280 chars for standard accounts)
+;   in  p_reply_to  : tweet ID to reply to; pass "" for a standalone tweet
+;   out p_resp_json : raw JSON response (includes new tweet id and text)
+;   out p_status    : HTTP status code (201 = created successfully)
+;   out p_error     : error message if status != 201, "" on success
+; -----------------------------------------------------------------------------
+operation CREATE_TWEET
+  parameters
+    in  string  p_text
+    in  string  p_reply_to
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  variables
+    string  v_path
+    string  v_json_body
+    string  v_escaped_text
+  endvariables
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if p_text = ""
+    p_error = "CREATE_TWEET: tweet text is required"
+    activate (v_logger) LOG_ERROR (p_error)
+    return
+  endif
+
+  ; Escape user-supplied text before embedding in JSON
+  v_escaped_text = p_text
+  activate ESCAPE_JSON_STRING (v_escaped_text)
+
+  v_path = "/tweets"
+
+  if p_reply_to != ""
+    v_json_body = '{"text":"' + v_escaped_text + '","reply":{"in_reply_to_tweet_id":"' + p_reply_to + '"}}'
+  else
+    v_json_body = '{"text":"' + v_escaped_text + '"}'
+  endif
+
+  activate (v_logger) LOG_INFO  ("CREATE_TWEET: text=" + p_text)
+  activate (v_logger) LOG_TRACE ("CREATE_TWEET: json_body=" + v_json_body)
+
+  activate (v_http_client) DO_POST (v_path, v_json_body, p_status, p_resp_json, p_error)
+
+  if p_status = 201
+    activate (v_logger) LOG_INFO ("CREATE_TWEET: created successfully. response=" + p_resp_json)
+  endif
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : SEARCH_TWEETS
+; Purpose   : Searches recent tweets matching the given query.
+;             Supports pagination via next_token from the API meta object.
+; Endpoint  : GET /2/tweets/search/recent
+;
+; Parameters:
+;   in  p_query       : X search query (e.g. "from:XDevelopers lang:en -is:retweet")
+;   in  p_max_results : results per page; clamped to API range 10–100; pass 0 for default (10)
+;   in  p_next_token  : pagination token from previous response meta.next_token; "" to start
+;   out p_resp_json   : raw JSON response (data array + meta with pagination info)
+;   out p_status      : HTTP status code (200 = success)
+;   out p_error       : error message if status != 200, "" on success
+; -----------------------------------------------------------------------------
+operation SEARCH_TWEETS
+  parameters
+    in  string  p_query
+    in  numeric p_max_results
+    in  string  p_next_token
+    out string  p_resp_json
+    out numeric p_status
+    out string  p_error
+  endparameters
+
+  variables
+    string  v_path
+    string  v_query_str
+    string  v_enc_query
+    numeric v_max
+  endvariables
+
+  p_resp_json = ""
+  p_status    = 0
+  p_error     = ""
+
+  if p_query = ""
+    p_error = "SEARCH_TWEETS: search query is required"
+    activate (v_logger) LOG_ERROR (p_error)
+    return
+  endif
+
+  ; Clamp max_results to the API-allowed range [10, 100]
+  v_max = p_max_results
+  if v_max < 10
+    v_max = 10
+  endif
+  if v_max > 100
+    v_max = 100
+  endif
+
+  ; Minimal percent-encoding for common query characters
+  v_enc_query = p_query
+  replace v_enc_query, " ",  "%20"
+  replace v_enc_query, "#",  "%23"
+  replace v_enc_query, ":",  "%3A"
+  replace v_enc_query, "@",  "%40"
+  replace v_enc_query, "(",  "%28"
+  replace v_enc_query, ")",  "%29"
+
+  v_path = "/tweets/search/recent"
+
+  v_query_str = "query=" + v_enc_query
+  v_query_str = v_query_str + "&max_results=" + string(v_max)
+  v_query_str = v_query_str + "&tweet.fields=created_at,author_id,text,public_metrics"
+  v_query_str = v_query_str + "&expansions=author_id"
+  v_query_str = v_query_str + "&user.fields=name,username"
+
+  if p_next_token != ""
+    v_query_str = v_query_str + "&next_token=" + p_next_token
+  endif
+
+  activate (v_logger) LOG_INFO  ("SEARCH_TWEETS: query=" + p_query + " max=" + string(v_max))
+  activate (v_logger) LOG_TRACE ("SEARCH_TWEETS: full query_str=" + v_query_str)
+
+  activate (v_http_client) DO_GET (v_path, v_query_str, p_status, p_resp_json, p_error)
+
+end operation
+
+end component

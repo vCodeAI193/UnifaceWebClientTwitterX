@@ -1,0 +1,247 @@
+; =============================================================================
+; Component : XAPI_HTTP_CLIENT
+; Purpose   : Sends authenticated HTTP GET and POST requests to X/Twitter API v2.
+;             All calls use OAuth 2.0 App-Only Bearer Token authentication.
+;             This is the ONLY component that calls httprequest — all other
+;             components delegate here, ensuring auth headers are always injected.
+;
+; Usage:
+;   1. activate XAPI_HTTP_CLIENT SET_CONFIG (p_bearer_token, p_base_url, p_logger)
+;   2. activate XAPI_HTTP_CLIENT DO_GET  (p_path, p_query,     p_status, p_resp_body, p_error)
+;   3. activate XAPI_HTTP_CLIENT DO_POST (p_path, p_json_body, p_status, p_resp_body, p_error)
+;
+; Dependencies: XAPI_LOGGER (for logging)
+;
+; NOTE on CREATE_TWEET:
+;   POST /2/tweets requires OAuth 2.0 with user context (write scope) or
+;   OAuth 1.0a User Access Token. Bearer Token alone is insufficient for writes.
+;   The current implementation uses Bearer Token for all calls. To support
+;   tweet creation, extend BUILD_AUTH_HEADERS with an OAuth 1.0a header mode.
+; =============================================================================
+component XAPI_HTTP_CLIENT
+
+  ; ---- Component-level PUBLIC variables ------------------------------------
+  PUBLIC string  v_bearer_token   ; OAuth 2.0 Bearer Token — set once by SET_CONFIG
+  PUBLIC string  v_base_url       ; API base URL, e.g. https://api.twitter.com/2
+  PUBLIC string  v_logger_comp    ; Logical name of the XAPI_LOGGER instance
+
+
+; -----------------------------------------------------------------------------
+; Operation : SET_CONFIG
+; Purpose   : Stores runtime configuration. Must be called before DO_GET/DO_POST.
+; Parameters:
+;   in p_bearer_token : OAuth 2.0 Bearer Token from xapi.ini
+;   in p_base_url     : API base URL from xapi.ini
+;   in p_logger_comp  : component name of the active XAPI_LOGGER instance
+; -----------------------------------------------------------------------------
+operation SET_CONFIG
+  parameters
+    in string p_bearer_token
+    in string p_base_url
+    in string p_logger_comp
+  endparameters
+
+  v_bearer_token = p_bearer_token
+  v_base_url     = p_base_url
+  v_logger_comp  = p_logger_comp
+
+  activate (v_logger_comp) LOG_INFO ("XAPI_HTTP_CLIENT: configuration loaded. base_url=" + p_base_url)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : BUILD_AUTH_HEADERS  (internal helper)
+; Purpose   : Assembles the standard request header block for every API call.
+;             Bearer Token injection happens exclusively here.
+; Parameters:
+;   out p_headers : assembled header string (one header per line, \n separated)
+; -----------------------------------------------------------------------------
+operation BUILD_AUTH_HEADERS
+  parameters
+    out string p_headers
+  endparameters
+
+  ; Authorization header carries the Bearer Token (security-critical line)
+  p_headers = "Authorization: Bearer " + v_bearer_token + "\n"
+  p_headers = p_headers + "Content-Type: application/json\n"
+  p_headers = p_headers + "Accept: application/json"
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : HANDLE_ERROR  (internal helper)
+; Purpose   : Classifies HTTP error codes into human-readable messages and
+;             logs them at ERROR level.
+; Parameters:
+;   in  p_operation  : calling operation name for log context
+;   in  p_status     : HTTP status code
+;   in  p_resp_body  : raw response body (may contain API error detail)
+;   out p_error_msg  : human-readable error description
+; -----------------------------------------------------------------------------
+operation HANDLE_ERROR
+  parameters
+    in  string  p_operation
+    in  numeric p_status
+    in  string  p_resp_body
+    out string  p_error_msg
+  endparameters
+
+  p_error_msg = ""
+
+  if p_status = 0
+    p_error_msg = "Transport error: httprequest returned 0 — no HTTP response received (check network/TLS)"
+  endif
+
+  if p_status = 400
+    p_error_msg = "Bad Request (400): malformed request — " + p_resp_body
+  endif
+
+  if p_status = 401
+    p_error_msg = "Unauthorized (401): invalid or expired BEARER_TOKEN — check config/xapi.ini"
+  endif
+
+  if p_status = 403
+    p_error_msg = "Forbidden (403): insufficient app permissions for this endpoint"
+  endif
+
+  if p_status = 404
+    p_error_msg = "Not Found (404): resource does not exist"
+  endif
+
+  if p_status = 429
+    p_error_msg = "Rate Limited (429): too many requests — back off and retry later"
+  endif
+
+  if p_status >= 500
+    p_error_msg = "Server Error (" + string(p_status) + "): X API internal error — " + p_resp_body
+  endif
+
+  ; Generic client error fallback
+  if p_error_msg = ""
+    if p_status >= 400
+      p_error_msg = "Client Error (" + string(p_status) + "): " + p_resp_body
+    endif
+  endif
+
+  if p_error_msg != ""
+    activate (v_logger_comp) LOG_ERROR (p_operation + ": " + p_error_msg)
+  endif
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : DO_GET
+; Purpose   : Sends an authenticated HTTP GET request to the X API.
+; Parameters:
+;   in  p_path      : URL path after base URL (e.g. "/tweets/12345")
+;   in  p_query     : query string WITHOUT leading "?" (pass "" if none)
+;   out p_status    : numeric HTTP status code
+;   out p_resp_body : raw JSON response body
+;   out p_error     : human-readable error, "" on success
+; -----------------------------------------------------------------------------
+operation DO_GET
+  parameters
+    in  string  p_path
+    in  string  p_query
+    out numeric p_status
+    out string  p_resp_body
+    out string  p_error
+  endparameters
+
+  variables
+    string  v_url
+    string  v_req_headers
+    string  v_req_body
+    string  v_resp_headers
+  endvariables
+
+  p_status    = 0
+  p_resp_body = ""
+  p_error     = ""
+  v_req_body  = ""
+
+  ; Assemble full URL with optional query string
+  v_url = v_base_url + p_path
+  if p_query != ""
+    v_url = v_url + "?" + p_query
+  endif
+
+  activate BUILD_AUTH_HEADERS (v_req_headers)
+
+  activate (v_logger_comp) LOG_TRACE ("DO_GET → " + v_url)
+
+  ; --- Core HTTP call ---
+  ; httprequest(url, method, req_headers, req_body, resp_headers, resp_body)
+  ; Returns: HTTP status code as numeric (200, 201, 400, 401, 429, 500 …)
+  p_status = httprequest(v_url, "GET", v_req_headers, v_req_body, v_resp_headers, p_resp_body)
+
+  activate (v_logger_comp) LOG_INFO ("DO_GET " + v_url + " → " + string(p_status))
+
+  if p_status = 200
+    activate (v_logger_comp) LOG_TRACE ("DO_GET response: " + p_resp_body)
+    return
+  endif
+
+  activate HANDLE_ERROR ("DO_GET", p_status, p_resp_body, p_error)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : DO_POST
+; Purpose   : Sends an authenticated HTTP POST request with a JSON body.
+; Parameters:
+;   in  p_path      : URL path after base URL (e.g. "/tweets")
+;   in  p_json_body : JSON string to send as request body
+;   out p_status    : numeric HTTP status code (201 = created successfully)
+;   out p_resp_body : raw JSON response body
+;   out p_error     : human-readable error, "" on success (status 200 or 201)
+; -----------------------------------------------------------------------------
+operation DO_POST
+  parameters
+    in  string  p_path
+    in  string  p_json_body
+    out numeric p_status
+    out string  p_resp_body
+    out string  p_error
+  endparameters
+
+  variables
+    string  v_url
+    string  v_req_headers
+    string  v_resp_headers
+  endvariables
+
+  p_status    = 0
+  p_resp_body = ""
+  p_error     = ""
+
+  v_url = v_base_url + p_path
+
+  activate BUILD_AUTH_HEADERS (v_req_headers)
+
+  activate (v_logger_comp) LOG_TRACE ("DO_POST → " + v_url + " body=" + p_json_body)
+
+  p_status = httprequest(v_url, "POST", v_req_headers, p_json_body, v_resp_headers, p_resp_body)
+
+  activate (v_logger_comp) LOG_INFO ("DO_POST " + v_url + " → " + string(p_status))
+
+  ; POST /2/tweets returns 201 Created on success
+  if p_status = 200
+    activate (v_logger_comp) LOG_TRACE ("DO_POST response: " + p_resp_body)
+    return
+  endif
+
+  if p_status = 201
+    activate (v_logger_comp) LOG_TRACE ("DO_POST response: " + p_resp_body)
+    return
+  endif
+
+  activate HANDLE_ERROR ("DO_POST", p_status, p_resp_body, p_error)
+
+end operation
+
+end component
