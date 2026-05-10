@@ -1,0 +1,229 @@
+; =============================================================================
+; Component : XAPI_USERS_TEST
+; Purpose   : Unit test suite for XAPI_USERS (5 tests).
+;             Uses XAPI_HTTP_CLIENT_MOCK for HTTP isolation.
+;
+; Dependencies: XAPI_USERS, XAPI_HTTP_CLIENT_MOCK, XAPI_LOGGER, XAPI_TEST_ASSERT
+; =============================================================================
+component XAPI_USERS_TEST
+
+  PUBLIC numeric v_pass
+  PUBLIC numeric v_fail
+  PUBLIC string  v_log
+
+
+; -----------------------------------------------------------------------------
+; Internal : SETUP
+; -----------------------------------------------------------------------------
+operation SETUP
+
+  v_pass = 0
+  v_fail = 0
+  v_log  = ""
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_users.log", 2)
+  activate XAPI_HTTP_CLIENT_MOCK SET_CONFIG ("FAKE_TOKEN", "https://api.twitter.com/2", "")
+  activate XAPI_USERS SET_DEPS ("XAPI_HTTP_CLIENT_MOCK", "XAPI_LOGGER")
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Internal : TEARDOWN
+; -----------------------------------------------------------------------------
+operation TEARDOWN
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_LOGGER CLOSE_LOG
+
+end operation
+
+
+; =============================================================================
+; GET_USER_BY_ID tests
+; =============================================================================
+
+operation TEST_GET_USER_BY_ID_EMPTY
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_GET_USER_BY_ID_EMPTY"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+
+  activate XAPI_USERS GET_USER_BY_ID ("", v_resp_json, v_status, v_error)
+
+  activate XAPI_TEST_ASSERT ASSERT_NOT_EMPTY (
+    v_label + ": error set for empty user ID",
+    v_error, v_pass, v_fail, v_log)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+  activate XAPI_TEST_ASSERT ASSERT_EMPTY (
+    v_label + ": no HTTP call for empty user ID",
+    v_last_url, v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_GET_USER_BY_ID_PATH
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_GET_USER_BY_ID_PATH"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/users/", 200, '{"data":{"id":"2244994945"}}')
+
+  activate XAPI_USERS GET_USER_BY_ID ("2244994945", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": URL contains /users/",
+    v_last_url, "/users/", v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": URL contains user ID",
+    v_last_url, "2244994945", v_pass, v_fail, v_log)
+
+end operation
+
+
+; =============================================================================
+; GET_USER_BY_USERNAME tests
+; =============================================================================
+
+operation TEST_GET_USER_BY_USERNAME_EMPTY
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_GET_USER_BY_USERNAME_EMPTY"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+
+  activate XAPI_USERS GET_USER_BY_USERNAME ("", v_resp_json, v_status, v_error)
+
+  activate XAPI_TEST_ASSERT ASSERT_NOT_EMPTY (
+    v_label + ": error set for empty username",
+    v_error, v_pass, v_fail, v_log)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+  activate XAPI_TEST_ASSERT ASSERT_EMPTY (
+    v_label + ": no HTTP call for empty username",
+    v_last_url, v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_GET_USER_BY_USERNAME_STRIPS_AT
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_GET_USER_BY_USERNAME_STRIPS_AT"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/users/by/username/", 200, '{"data":{"username":"XDevelopers"}}')
+
+  ; Pass handle WITH leading @ — must be stripped
+  activate XAPI_USERS GET_USER_BY_USERNAME ("@XDevelopers", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+
+  ; Correct path must be present (without @)
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": URL contains /users/by/username/XDevelopers",
+    v_last_url, "/users/by/username/XDevelopers", v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_GET_USER_BY_USERNAME_PATH
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_GET_USER_BY_USERNAME_PATH"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/users/by/username/", 200, '{"data":{"username":"uniface"}}')
+
+  activate XAPI_USERS GET_USER_BY_USERNAME ("uniface", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": URL contains /users/by/username/",
+    v_last_url, "/users/by/username/", v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": URL contains username",
+    v_last_url, "uniface", v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : RUN_SUITE
+; -----------------------------------------------------------------------------
+operation RUN_SUITE
+  parameters
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  activate SETUP
+
+  p_log = p_log + "\n=== SUITE: XAPI_USERS_TEST ===\n"
+
+  activate TEST_GET_USER_BY_ID_EMPTY
+  activate TEST_GET_USER_BY_ID_PATH
+  activate TEST_GET_USER_BY_USERNAME_EMPTY
+  activate TEST_GET_USER_BY_USERNAME_STRIPS_AT
+  activate TEST_GET_USER_BY_USERNAME_PATH
+
+  p_pass = p_pass + v_pass
+  p_fail = p_fail + v_fail
+  p_log  = p_log  + v_log
+
+  p_log = p_log + "=== SUITE DONE: passed=" + string(v_pass) + " failed=" + string(v_fail) + " ===\n"
+
+  activate TEARDOWN
+
+end operation
+
+end component

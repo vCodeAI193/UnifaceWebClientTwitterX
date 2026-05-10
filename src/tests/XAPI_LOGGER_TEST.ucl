@@ -1,0 +1,306 @@
+; =============================================================================
+; Component : XAPI_LOGGER_TEST
+; Purpose   : Unit test suite for XAPI_LOGGER (8 tests).
+;
+; Strategy  : XAPI_LOGGER.v_log_open and v_min_level are PUBLIC variables
+;             readable across component boundaries as XAPI_LOGGER.v_log_open.
+;             We assert their values after each operation rather than reading
+;             the log file (no $readfile built-in in ProcScript).
+;             Each test calls TEARDOWN_LOGGER to close the file handle so the
+;             global LOGFILE handle is always in a clean state for the next test.
+;
+; Run via:
+;   activate XAPI_LOGGER_TEST RUN_SUITE (v_pass, v_fail, v_log)
+;
+; Dependencies: XAPI_LOGGER, XAPI_TEST_ASSERT
+; =============================================================================
+component XAPI_LOGGER_TEST
+
+  PUBLIC numeric v_pass
+  PUBLIC numeric v_fail
+  PUBLIC string  v_log
+
+
+; -----------------------------------------------------------------------------
+; Internal : SETUP
+; Initialises suite counters and ensures a clean logger state.
+; -----------------------------------------------------------------------------
+operation SETUP
+
+  v_pass = 0
+  v_fail = 0
+  v_log  = ""
+
+  ; Ensure any previously open log file is closed
+  activate XAPI_LOGGER CLOSE_LOG
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Internal : TEARDOWN_LOGGER
+; Closes logger after each individual test. Idempotent.
+; -----------------------------------------------------------------------------
+operation TEARDOWN_LOGGER
+
+  activate XAPI_LOGGER CLOSE_LOG
+
+end operation
+
+
+; =============================================================================
+; Tests
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; TEST_INIT_CREATES_FILE
+; After INIT, v_log_open must be 1 (file handle open).
+; -----------------------------------------------------------------------------
+operation TEST_INIT_CREATES_FILE
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_INIT_CREATES_FILE"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_logger.log", 0)
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_log_open = 1 after INIT",
+    1, XAPI_LOGGER.v_log_open,
+    v_pass, v_fail, v_log)
+
+  activate TEARDOWN_LOGGER
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_LOG_TRACE_LEVEL_0
+; LOG_TRACE at min_level=0 executes without early return — file stays open.
+; -----------------------------------------------------------------------------
+operation TEST_LOG_TRACE_LEVEL_0
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_LOG_TRACE_LEVEL_0"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_logger.log", 0)
+  activate XAPI_LOGGER LOG_TRACE ("trace message at min_level=0 -- must be written")
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": file still open after LOG_TRACE at level 0",
+    1, XAPI_LOGGER.v_log_open,
+    v_pass, v_fail, v_log)
+
+  activate TEARDOWN_LOGGER
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_LOG_TRACE_FILTERED_AT_1
+; LOG_TRACE at min_level=1 hits the early-return filter — file stays open.
+; We verify min_level was stored correctly and no crash occurred.
+; -----------------------------------------------------------------------------
+operation TEST_LOG_TRACE_FILTERED_AT_1
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_LOG_TRACE_FILTERED_AT_1"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_logger.log", 1)
+  activate XAPI_LOGGER LOG_TRACE ("trace -- must be filtered at min_level=1")
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_min_level stored as 1",
+    1, XAPI_LOGGER.v_min_level,
+    v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": file still open after filtered trace",
+    1, XAPI_LOGGER.v_log_open,
+    v_pass, v_fail, v_log)
+
+  activate TEARDOWN_LOGGER
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_LOG_INFO_LEVEL_1
+; LOG_INFO at min_level=1 passes the filter — file stays open.
+; -----------------------------------------------------------------------------
+operation TEST_LOG_INFO_LEVEL_1
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_LOG_INFO_LEVEL_1"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_logger.log", 1)
+  activate XAPI_LOGGER LOG_INFO ("info at min_level=1 -- must be written")
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": file still open after LOG_INFO at level 1",
+    1, XAPI_LOGGER.v_log_open,
+    v_pass, v_fail, v_log)
+
+  activate TEARDOWN_LOGGER
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_LOG_INFO_FILTERED_AT_2
+; LOG_INFO at min_level=2 hits the early-return filter.
+; -----------------------------------------------------------------------------
+operation TEST_LOG_INFO_FILTERED_AT_2
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_LOG_INFO_FILTERED_AT_2"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_logger.log", 2)
+  activate XAPI_LOGGER LOG_INFO ("info -- must be filtered at min_level=2")
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_min_level stored as 2",
+    2, XAPI_LOGGER.v_min_level,
+    v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": file still open after filtered info",
+    1, XAPI_LOGGER.v_log_open,
+    v_pass, v_fail, v_log)
+
+  activate TEARDOWN_LOGGER
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_LOG_ERROR_ALWAYS
+; LOG_ERROR at min_level=2 passes the filter (2 >= 2) — file stays open.
+; -----------------------------------------------------------------------------
+operation TEST_LOG_ERROR_ALWAYS
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_LOG_ERROR_ALWAYS"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_logger.log", 2)
+  activate XAPI_LOGGER LOG_ERROR ("error at min_level=2 -- must always be written")
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": file still open after LOG_ERROR at level 2",
+    1, XAPI_LOGGER.v_log_open,
+    v_pass, v_fail, v_log)
+
+  activate TEARDOWN_LOGGER
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_CLOSE_LOG_RESETS
+; CLOSE_LOG must set v_log_open = 0.
+; -----------------------------------------------------------------------------
+operation TEST_CLOSE_LOG_RESETS
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_CLOSE_LOG_RESETS"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_logger.log", 1)
+  activate XAPI_LOGGER CLOSE_LOG
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_log_open = 0 after CLOSE_LOG",
+    0, XAPI_LOGGER.v_log_open,
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_DOUBLE_CLOSE_SAFE
+; Calling CLOSE_LOG twice must not crash (idempotency guard: if v_log_open = 1).
+; -----------------------------------------------------------------------------
+operation TEST_DOUBLE_CLOSE_SAFE
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_DOUBLE_CLOSE_SAFE"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_logger.log", 1)
+  activate XAPI_LOGGER CLOSE_LOG
+  activate XAPI_LOGGER CLOSE_LOG
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_log_open still 0 after double CLOSE_LOG",
+    0, XAPI_LOGGER.v_log_open,
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : RUN_SUITE
+; Runs all 8 tests and accumulates results into the caller's counters.
+; Parameters:
+;   io p_pass : cumulative pass counter
+;   io p_fail : cumulative fail counter
+;   io p_log  : cumulative report string
+; -----------------------------------------------------------------------------
+operation RUN_SUITE
+  parameters
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  activate SETUP
+
+  p_log = p_log + "\n=== SUITE: XAPI_LOGGER_TEST ===\n"
+
+  activate TEST_INIT_CREATES_FILE
+  activate TEST_LOG_TRACE_LEVEL_0
+  activate TEST_LOG_TRACE_FILTERED_AT_1
+  activate TEST_LOG_INFO_LEVEL_1
+  activate TEST_LOG_INFO_FILTERED_AT_2
+  activate TEST_LOG_ERROR_ALWAYS
+  activate TEST_CLOSE_LOG_RESETS
+  activate TEST_DOUBLE_CLOSE_SAFE
+
+  p_pass = p_pass + v_pass
+  p_fail = p_fail + v_fail
+  p_log  = p_log  + v_log
+
+  p_log = p_log + "=== SUITE DONE: passed=" + string(v_pass) + " failed=" + string(v_fail) + " ===\n"
+
+end operation
+
+end component

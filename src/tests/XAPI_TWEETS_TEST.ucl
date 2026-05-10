@@ -1,0 +1,425 @@
+; =============================================================================
+; Component : XAPI_TWEETS_TEST
+; Purpose   : Unit test suite for XAPI_TWEETS (11 tests).
+;
+; Wiring    : XAPI_TWEETS.v_http_client is set to "XAPI_HTTP_CLIENT_MOCK"
+;             via SET_DEPS so no real HTTP traffic occurs.
+;             XAPI_LOGGER runs at min_level=2 (errors only) to suppress noise.
+;
+; Mock pattern per test:
+;   1. MOCK_RESET  -- clear previous registrations
+;   2. MOCK_SETUP  -- register canned response for expected path prefix
+;   3. activate XAPI_TWEETS <operation> (...)
+;   4. GET_LAST_URL / GET_LAST_BODY -- capture what was called
+;   5. ASSERT_* -- verify path, body, status, error
+;
+; Dependencies: XAPI_TWEETS, XAPI_HTTP_CLIENT_MOCK, XAPI_LOGGER, XAPI_TEST_ASSERT
+; =============================================================================
+component XAPI_TWEETS_TEST
+
+  PUBLIC numeric v_pass
+  PUBLIC numeric v_fail
+  PUBLIC string  v_log
+
+
+; -----------------------------------------------------------------------------
+; Internal : SETUP
+; -----------------------------------------------------------------------------
+operation SETUP
+
+  v_pass = 0
+  v_fail = 0
+  v_log  = ""
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_tweets.log", 2)
+  activate XAPI_HTTP_CLIENT_MOCK SET_CONFIG ("FAKE_TOKEN", "https://api.twitter.com/2", "")
+  activate XAPI_TWEETS SET_DEPS ("XAPI_HTTP_CLIENT_MOCK", "XAPI_LOGGER")
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Internal : TEARDOWN
+; -----------------------------------------------------------------------------
+operation TEARDOWN
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_LOGGER CLOSE_LOG
+
+end operation
+
+
+; =============================================================================
+; GET_TWEET tests
+; =============================================================================
+
+operation TEST_GET_TWEET_EMPTY_ID
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_GET_TWEET_EMPTY_ID"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+
+  activate XAPI_TWEETS GET_TWEET ("", v_resp_json, v_status, v_error)
+
+  activate XAPI_TEST_ASSERT ASSERT_NOT_EMPTY (
+    v_label + ": error set for empty ID",
+    v_error, v_pass, v_fail, v_log)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+  activate XAPI_TEST_ASSERT ASSERT_EMPTY (
+    v_label + ": no HTTP call for empty ID",
+    v_last_url, v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_GET_TWEET_CORRECT_PATH
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_GET_TWEET_CORRECT_PATH"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets/", 200, '{"data":{"id":"9876543210"}}')
+
+  activate XAPI_TWEETS GET_TWEET ("9876543210", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": URL contains /tweets/",
+    v_last_url, "/tweets/", v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": URL contains tweet ID",
+    v_last_url, "9876543210", v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": status is 200",
+    200, v_status, v_pass, v_fail, v_log)
+
+end operation
+
+
+; =============================================================================
+; CREATE_TWEET tests
+; =============================================================================
+
+operation TEST_CREATE_TWEET_EMPTY_TEXT
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_CREATE_TWEET_EMPTY_TEXT"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+
+  activate XAPI_TWEETS CREATE_TWEET ("", "", v_resp_json, v_status, v_error)
+
+  activate XAPI_TEST_ASSERT ASSERT_NOT_EMPTY (
+    v_label + ": error set for empty text",
+    v_error, v_pass, v_fail, v_log)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+  activate XAPI_TEST_ASSERT ASSERT_EMPTY (
+    v_label + ": no HTTP call for empty text",
+    v_last_url, v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_CREATE_TWEET_JSON_BODY
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_body
+  endvariables
+
+  v_label = "TEST_CREATE_TWEET_JSON_BODY"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets", 201, '{"data":{"id":"111"}}')
+
+  activate XAPI_TWEETS CREATE_TWEET ("Hello world", "", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_BODY (v_last_body)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ': body contains "text"',
+    v_last_body, '"text"', v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ': body contains tweet text',
+    v_last_body, "Hello world", v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_CREATE_TWEET_WITH_REPLY
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_body
+  endvariables
+
+  v_label = "TEST_CREATE_TWEET_WITH_REPLY"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets", 201, '{"data":{"id":"222"}}')
+
+  activate XAPI_TWEETS CREATE_TWEET ("Replying to you", "99887766554", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_BODY (v_last_body)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": body contains in_reply_to_tweet_id",
+    v_last_body, "in_reply_to_tweet_id", v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": body contains reply tweet ID",
+    v_last_body, "99887766554", v_pass, v_fail, v_log)
+
+end operation
+
+
+; =============================================================================
+; SEARCH_TWEETS tests
+; =============================================================================
+
+operation TEST_SEARCH_EMPTY_QUERY
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_SEARCH_EMPTY_QUERY"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+
+  activate XAPI_TWEETS SEARCH_TWEETS ("", 10, "", v_resp_json, v_status, v_error)
+
+  activate XAPI_TEST_ASSERT ASSERT_NOT_EMPTY (
+    v_label + ": error set for empty query",
+    v_error, v_pass, v_fail, v_log)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+  activate XAPI_TEST_ASSERT ASSERT_EMPTY (
+    v_label + ": no HTTP call for empty query",
+    v_last_url, v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_SEARCH_CLAMP_MAX_BELOW_10
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_SEARCH_CLAMP_MAX_BELOW_10"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets/search/recent", 200, '{"data":[]}')
+
+  activate XAPI_TWEETS SEARCH_TWEETS ("uniface", 5, "", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": max_results clamped to 10",
+    v_last_url, "max_results=10", v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_SEARCH_CLAMP_MAX_ABOVE_100
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_SEARCH_CLAMP_MAX_ABOVE_100"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets/search/recent", 200, '{"data":[]}')
+
+  activate XAPI_TWEETS SEARCH_TWEETS ("uniface", 200, "", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": max_results clamped to 100",
+    v_last_url, "max_results=100", v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_SEARCH_INCLUDES_NEXT_TOKEN
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_url
+  endvariables
+
+  v_label = "TEST_SEARCH_INCLUDES_NEXT_TOKEN"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets/search/recent", 200, '{"data":[]}')
+
+  activate XAPI_TWEETS SEARCH_TWEETS ("uniface", 10, "abc123paginationXYZ", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_URL (v_last_url)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": next_token present in URL",
+    v_last_url, "next_token=abc123paginationXYZ", v_pass, v_fail, v_log)
+
+end operation
+
+
+; =============================================================================
+; ESCAPE_JSON_STRING tests (tested indirectly via CREATE_TWEET)
+; =============================================================================
+
+operation TEST_ESCAPE_QUOTES
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_body
+  endvariables
+
+  v_label = "TEST_ESCAPE_QUOTES"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets", 201, '{"data":{"id":"333"}}')
+
+  activate XAPI_TWEETS CREATE_TWEET ('Say "hello"', "", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_BODY (v_last_body)
+
+  ; The escaped form \" must appear in the body
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ': double-quote escaped to \" in body',
+    v_last_body, '\"', v_pass, v_fail, v_log)
+
+end operation
+
+
+operation TEST_ESCAPE_BACKSLASH
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+    string  v_last_body
+  endvariables
+
+  v_label = "TEST_ESCAPE_BACKSLASH"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
+  activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets", 201, '{"data":{"id":"444"}}')
+
+  activate XAPI_TWEETS CREATE_TWEET ("path\to\file", "", v_resp_json, v_status, v_error)
+
+  activate XAPI_HTTP_CLIENT_MOCK GET_LAST_BODY (v_last_body)
+
+  ; Backslash must be escaped to \\
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": backslash escaped to \\\\ in body",
+    v_last_body, "\\", v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : RUN_SUITE
+; -----------------------------------------------------------------------------
+operation RUN_SUITE
+  parameters
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  activate SETUP
+
+  p_log = p_log + "\n=== SUITE: XAPI_TWEETS_TEST ===\n"
+
+  activate TEST_GET_TWEET_EMPTY_ID
+  activate TEST_GET_TWEET_CORRECT_PATH
+  activate TEST_CREATE_TWEET_EMPTY_TEXT
+  activate TEST_CREATE_TWEET_JSON_BODY
+  activate TEST_CREATE_TWEET_WITH_REPLY
+  activate TEST_SEARCH_EMPTY_QUERY
+  activate TEST_SEARCH_CLAMP_MAX_BELOW_10
+  activate TEST_SEARCH_CLAMP_MAX_ABOVE_100
+  activate TEST_SEARCH_INCLUDES_NEXT_TOKEN
+  activate TEST_ESCAPE_QUOTES
+  activate TEST_ESCAPE_BACKSLASH
+
+  p_pass = p_pass + v_pass
+  p_fail = p_fail + v_fail
+  p_log  = p_log  + v_log
+
+  p_log = p_log + "=== SUITE DONE: passed=" + string(v_pass) + " failed=" + string(v_fail) + " ===\n"
+
+  activate TEARDOWN
+
+end operation
+
+end component

@@ -1,0 +1,355 @@
+; =============================================================================
+; Component : XAPI_HTTP_CLIENT_MOCK
+; Purpose   : Test double for XAPI_HTTP_CLIENT.
+;             Implements the same external interface (SET_CONFIG, DO_GET,
+;             DO_POST) so XAPI_TWEETS and XAPI_USERS can be unit-tested
+;             without any real HTTP traffic.
+;
+; How it works:
+;   1. MOCK_SETUP registers up to 5 canned responses using path PREFIX matching.
+;      Responses stored in indexed PUBLIC variables (v_path_1..5, etc.).
+;   2. DO_GET / DO_POST scan the registry — first prefix match wins.
+;      On no match: status 404 / body "MOCK_NO_MATCH" is returned.
+;   3. v_last_url and v_last_body capture the last call for assertions via
+;      GET_LAST_URL / GET_LAST_BODY.
+;   4. MOCK_RESET clears all slots between test cases.
+;
+; Wiring in tests:
+;   activate XAPI_TWEETS SET_DEPS ("XAPI_HTTP_CLIENT_MOCK", "XAPI_LOGGER")
+;
+; Dependencies: none (no XAPI_LOGGER calls to keep wiring minimal)
+; =============================================================================
+component XAPI_HTTP_CLIENT_MOCK
+
+  ; ---- Config (mirrors XAPI_HTTP_CLIENT PUBLIC layout exactly) ---------------
+  PUBLIC string  v_bearer_token
+  PUBLIC string  v_base_url
+  PUBLIC string  v_logger_comp
+
+  ; ---- Mock response registry (indexed, capacity = 5) -----------------------
+  PUBLIC string  v_path_1
+  PUBLIC numeric v_status_1
+  PUBLIC string  v_body_1
+
+  PUBLIC string  v_path_2
+  PUBLIC numeric v_status_2
+  PUBLIC string  v_body_2
+
+  PUBLIC string  v_path_3
+  PUBLIC numeric v_status_3
+  PUBLIC string  v_body_3
+
+  PUBLIC string  v_path_4
+  PUBLIC numeric v_status_4
+  PUBLIC string  v_body_4
+
+  PUBLIC string  v_path_5
+  PUBLIC numeric v_status_5
+  PUBLIC string  v_body_5
+
+  PUBLIC numeric v_count       ; number of registered patterns (0..5)
+
+  ; ---- Call capture (for assertions) ----------------------------------------
+  PUBLIC string  v_last_url    ; last full URL passed to DO_GET or DO_POST
+  PUBLIC string  v_last_body   ; last POST body ("" after a DO_GET)
+
+
+; -----------------------------------------------------------------------------
+; Operation : SET_CONFIG  (mirrors XAPI_HTTP_CLIENT.SET_CONFIG)
+; -----------------------------------------------------------------------------
+operation SET_CONFIG
+  parameters
+    in string p_bearer_token
+    in string p_base_url
+    in string p_logger_comp
+  endparameters
+
+  v_bearer_token = p_bearer_token
+  v_base_url     = p_base_url
+  v_logger_comp  = p_logger_comp
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : MOCK_SETUP
+; Registers a canned response for a path pattern (prefix match, first-wins).
+; Call up to 5 times before running a test. Excess calls are traced and ignored.
+; Parameters:
+;   in p_path_pattern : path prefix to match (e.g. "/tweets/")
+;   in p_status       : HTTP status code to return (e.g. 200)
+;   in p_body         : JSON body string to return
+; -----------------------------------------------------------------------------
+operation MOCK_SETUP
+  parameters
+    in string  p_path_pattern
+    in numeric p_status
+    in string  p_body
+  endparameters
+
+  if v_count = 0
+    v_path_1   = p_path_pattern
+    v_status_1 = p_status
+    v_body_1   = p_body
+    v_count    = 1
+    return
+  endif
+
+  if v_count = 1
+    v_path_2   = p_path_pattern
+    v_status_2 = p_status
+    v_body_2   = p_body
+    v_count    = 2
+    return
+  endif
+
+  if v_count = 2
+    v_path_3   = p_path_pattern
+    v_status_3 = p_status
+    v_body_3   = p_body
+    v_count    = 3
+    return
+  endif
+
+  if v_count = 3
+    v_path_4   = p_path_pattern
+    v_status_4 = p_status
+    v_body_4   = p_body
+    v_count    = 4
+    return
+  endif
+
+  if v_count = 4
+    v_path_5   = p_path_pattern
+    v_status_5 = p_status
+    v_body_5   = p_body
+    v_count    = 5
+    return
+  endif
+
+  trace "XAPI_HTTP_CLIENT_MOCK: MOCK_SETUP capacity exceeded (max 5). Pattern ignored: " + p_path_pattern
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : MOCK_RESET
+; Clears all registered responses and captured call data.
+; Call between test cases that share the same mock instance.
+; -----------------------------------------------------------------------------
+operation MOCK_RESET
+
+  v_path_1    = ""
+  v_status_1  = 0
+  v_body_1    = ""
+
+  v_path_2    = ""
+  v_status_2  = 0
+  v_body_2    = ""
+
+  v_path_3    = ""
+  v_status_3  = 0
+  v_body_3    = ""
+
+  v_path_4    = ""
+  v_status_4  = 0
+  v_body_4    = ""
+
+  v_path_5    = ""
+  v_status_5  = 0
+  v_body_5    = ""
+
+  v_count     = 0
+  v_last_url  = ""
+  v_last_body = ""
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Internal helper : FIND_MATCH
+; Scans the registry and returns the matched status and body.
+; Matching rule: the registered pattern is treated as a PREFIX of p_path.
+; No match returns status 404 / body "MOCK_NO_MATCH".
+; -----------------------------------------------------------------------------
+operation FIND_MATCH
+  parameters
+    in  string  p_path
+    out numeric p_status
+    out string  p_body
+  endparameters
+
+  variables
+    numeric v_pat_len
+    string  v_window
+  endvariables
+
+  p_status = 404
+  p_body   = "MOCK_NO_MATCH"
+
+  if v_count >= 1
+    if v_path_1 != ""
+      v_pat_len = $length(v_path_1)
+      v_window  = $substr(p_path, 1, v_pat_len)
+      if v_window = v_path_1
+        p_status = v_status_1
+        p_body   = v_body_1
+        return
+      endif
+    endif
+  endif
+
+  if v_count >= 2
+    if v_path_2 != ""
+      v_pat_len = $length(v_path_2)
+      v_window  = $substr(p_path, 1, v_pat_len)
+      if v_window = v_path_2
+        p_status = v_status_2
+        p_body   = v_body_2
+        return
+      endif
+    endif
+  endif
+
+  if v_count >= 3
+    if v_path_3 != ""
+      v_pat_len = $length(v_path_3)
+      v_window  = $substr(p_path, 1, v_pat_len)
+      if v_window = v_path_3
+        p_status = v_status_3
+        p_body   = v_body_3
+        return
+      endif
+    endif
+  endif
+
+  if v_count >= 4
+    if v_path_4 != ""
+      v_pat_len = $length(v_path_4)
+      v_window  = $substr(p_path, 1, v_pat_len)
+      if v_window = v_path_4
+        p_status = v_status_4
+        p_body   = v_body_4
+        return
+      endif
+    endif
+  endif
+
+  if v_count >= 5
+    if v_path_5 != ""
+      v_pat_len = $length(v_path_5)
+      v_window  = $substr(p_path, 1, v_pat_len)
+      if v_window = v_path_5
+        p_status = v_status_5
+        p_body   = v_body_5
+        return
+      endif
+    endif
+  endif
+
+  trace "XAPI_HTTP_CLIENT_MOCK: no pattern matched path=" + p_path
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : DO_GET  (mirrors XAPI_HTTP_CLIENT.DO_GET)
+; Captures the full URL and returns the first matching canned response.
+; -----------------------------------------------------------------------------
+operation DO_GET
+  parameters
+    in  string  p_path
+    in  string  p_query
+    out numeric p_status
+    out string  p_resp_body
+    out string  p_error
+  endparameters
+
+  variables
+    string v_url
+  endvariables
+
+  p_error = ""
+
+  v_url = v_base_url + p_path
+  if p_query != ""
+    v_url = v_url + "?" + p_query
+  endif
+
+  v_last_url  = v_url
+  v_last_body = ""
+
+  activate FIND_MATCH (p_path, p_status, p_resp_body)
+
+  if p_status != 200
+    if p_status != 201
+      p_error = "MOCK: status " + string(p_status) + " for path " + p_path
+    endif
+  endif
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : DO_POST  (mirrors XAPI_HTTP_CLIENT.DO_POST)
+; Captures the full URL and POST body; returns the first matching response.
+; -----------------------------------------------------------------------------
+operation DO_POST
+  parameters
+    in  string  p_path
+    in  string  p_json_body
+    out numeric p_status
+    out string  p_resp_body
+    out string  p_error
+  endparameters
+
+  variables
+    string v_url
+  endvariables
+
+  p_error = ""
+
+  v_url = v_base_url + p_path
+
+  v_last_url  = v_url
+  v_last_body = p_json_body
+
+  activate FIND_MATCH (p_path, p_status, p_resp_body)
+
+  if p_status != 200
+    if p_status != 201
+      p_error = "MOCK: status " + string(p_status) + " for path " + p_path
+    endif
+  endif
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : GET_LAST_URL
+; Returns the last URL passed to DO_GET or DO_POST.
+; -----------------------------------------------------------------------------
+operation GET_LAST_URL
+  parameters
+    out string p_url
+  endparameters
+
+  p_url = v_last_url
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : GET_LAST_BODY
+; Returns the last JSON body passed to DO_POST ("" after a DO_GET).
+; -----------------------------------------------------------------------------
+operation GET_LAST_BODY
+  parameters
+    out string p_body
+  endparameters
+
+  p_body = v_last_body
+
+end operation
+
+end component

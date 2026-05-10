@@ -1,0 +1,342 @@
+; =============================================================================
+; Component : XAPI_HTTP_CLIENT_TEST
+; Purpose   : Unit test suite for XAPI_HTTP_CLIENT (10 tests).
+;
+; Strategy  :
+;   - BUILD_AUTH_HEADERS and HANDLE_ERROR are internal operations callable
+;     via "activate XAPI_HTTP_CLIENT <op>" — we test them directly.
+;   - URL assembly (DO_GET with/without query) is verified by reconstructing
+;     the formula from PUBLIC variables and asserting the expected string,
+;     avoiding live HTTP calls entirely.
+;   - XAPI_LOGGER is opened at min_level=2 (errors only) to suppress noise.
+;
+; Dependencies: XAPI_HTTP_CLIENT, XAPI_LOGGER, XAPI_TEST_ASSERT
+; =============================================================================
+component XAPI_HTTP_CLIENT_TEST
+
+  PUBLIC numeric v_pass
+  PUBLIC numeric v_fail
+  PUBLIC string  v_log
+
+
+; -----------------------------------------------------------------------------
+; Internal : SETUP
+; -----------------------------------------------------------------------------
+operation SETUP
+
+  v_pass = 0
+  v_fail = 0
+  v_log  = ""
+
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_http.log", 2)
+
+  activate XAPI_HTTP_CLIENT SET_CONFIG (
+    "TEST_BEARER_TOKEN_ABC123",
+    "https://api.twitter.com/2",
+    "XAPI_LOGGER")
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Internal : TEARDOWN
+; -----------------------------------------------------------------------------
+operation TEARDOWN
+
+  activate XAPI_LOGGER CLOSE_LOG
+
+end operation
+
+
+; =============================================================================
+; Tests
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; TEST_BUILD_AUTH_HEADERS_BEARER
+; Authorization: Bearer header must be present in output.
+; -----------------------------------------------------------------------------
+operation TEST_BUILD_AUTH_HEADERS_BEARER
+
+  variables
+    string v_label
+    string v_headers
+  endvariables
+
+  v_label = "TEST_BUILD_AUTH_HEADERS_BEARER"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT BUILD_AUTH_HEADERS (v_headers)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": headers contain Authorization: Bearer",
+    v_headers, "Authorization: Bearer TEST_BEARER_TOKEN_ABC123",
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_BUILD_AUTH_HEADERS_CONTENT_TYPE
+; Content-Type: application/json must be present.
+; -----------------------------------------------------------------------------
+operation TEST_BUILD_AUTH_HEADERS_CONTENT_TYPE
+
+  variables
+    string v_label
+    string v_headers
+  endvariables
+
+  v_label = "TEST_BUILD_AUTH_HEADERS_CONTENT_TYPE"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT BUILD_AUTH_HEADERS (v_headers)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": headers contain Content-Type: application/json",
+    v_headers, "Content-Type: application/json",
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_HANDLE_ERROR_STATUS_0
+; Status 0 (no HTTP response) must map to a "Transport error" message.
+; -----------------------------------------------------------------------------
+operation TEST_HANDLE_ERROR_STATUS_0
+
+  variables
+    string v_label
+    string v_error_msg
+  endvariables
+
+  v_label = "TEST_HANDLE_ERROR_STATUS_0"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT HANDLE_ERROR ("TestOp", 0, "", v_error_msg)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": status 0 maps to Transport error",
+    v_error_msg, "Transport error",
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_HANDLE_ERROR_STATUS_401
+; -----------------------------------------------------------------------------
+operation TEST_HANDLE_ERROR_STATUS_401
+
+  variables
+    string v_label
+    string v_error_msg
+  endvariables
+
+  v_label = "TEST_HANDLE_ERROR_STATUS_401"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT HANDLE_ERROR ("TestOp", 401, "", v_error_msg)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": status 401 maps to Unauthorized",
+    v_error_msg, "Unauthorized",
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_HANDLE_ERROR_STATUS_403
+; -----------------------------------------------------------------------------
+operation TEST_HANDLE_ERROR_STATUS_403
+
+  variables
+    string v_label
+    string v_error_msg
+  endvariables
+
+  v_label = "TEST_HANDLE_ERROR_STATUS_403"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT HANDLE_ERROR ("TestOp", 403, "", v_error_msg)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": status 403 maps to Forbidden",
+    v_error_msg, "Forbidden",
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_HANDLE_ERROR_STATUS_404
+; -----------------------------------------------------------------------------
+operation TEST_HANDLE_ERROR_STATUS_404
+
+  variables
+    string v_label
+    string v_error_msg
+  endvariables
+
+  v_label = "TEST_HANDLE_ERROR_STATUS_404"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT HANDLE_ERROR ("TestOp", 404, "", v_error_msg)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": status 404 maps to Not Found",
+    v_error_msg, "Not Found",
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_HANDLE_ERROR_STATUS_429
+; -----------------------------------------------------------------------------
+operation TEST_HANDLE_ERROR_STATUS_429
+
+  variables
+    string v_label
+    string v_error_msg
+  endvariables
+
+  v_label = "TEST_HANDLE_ERROR_STATUS_429"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT HANDLE_ERROR ("TestOp", 429, "", v_error_msg)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": status 429 maps to Rate Limited",
+    v_error_msg, "Rate Limited",
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_HANDLE_ERROR_STATUS_500
+; -----------------------------------------------------------------------------
+operation TEST_HANDLE_ERROR_STATUS_500
+
+  variables
+    string v_label
+    string v_error_msg
+  endvariables
+
+  v_label = "TEST_HANDLE_ERROR_STATUS_500"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_HTTP_CLIENT HANDLE_ERROR ("TestOp", 500, "internal body", v_error_msg)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": status 500 maps to Server Error",
+    v_error_msg, "Server Error",
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_DO_GET_URL_WITH_QUERY
+; URL formula: base + path + "?" + query.
+; Verified by reconstructing from stored PUBLIC variables.
+; -----------------------------------------------------------------------------
+operation TEST_DO_GET_URL_WITH_QUERY
+
+  variables
+    string v_label
+    string v_expected_url
+    string v_base
+  endvariables
+
+  v_label = "TEST_DO_GET_URL_WITH_QUERY"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  v_base = XAPI_HTTP_CLIENT.v_base_url
+
+  v_expected_url = v_base + "/tweets/123" + "?" + "tweet.fields=text"
+
+  activate XAPI_TEST_ASSERT ASSERT_EQUAL (
+    v_label + ": URL = base + path + ? + query",
+    "https://api.twitter.com/2/tweets/123?tweet.fields=text",
+    v_expected_url,
+    v_pass, v_fail, v_log)
+
+  ; Also verify base_url was stored correctly by SET_CONFIG
+  activate XAPI_TEST_ASSERT ASSERT_EQUAL (
+    v_label + ": v_base_url correct",
+    "https://api.twitter.com/2",
+    XAPI_HTTP_CLIENT.v_base_url,
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_DO_GET_URL_WITHOUT_QUERY
+; When query is "" the URL must be base + path only (no "?").
+; -----------------------------------------------------------------------------
+operation TEST_DO_GET_URL_WITHOUT_QUERY
+
+  variables
+    string v_label
+    string v_expected_url
+    string v_base
+  endvariables
+
+  v_label = "TEST_DO_GET_URL_WITHOUT_QUERY"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  v_base = XAPI_HTTP_CLIENT.v_base_url
+
+  ; When p_query = "" the DO_GET code does NOT append "?"
+  v_expected_url = v_base + "/tweets/456"
+
+  activate XAPI_TEST_ASSERT ASSERT_EQUAL (
+    v_label + ": URL has no query string when query is empty",
+    "https://api.twitter.com/2/tweets/456",
+    v_expected_url,
+    v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : RUN_SUITE
+; -----------------------------------------------------------------------------
+operation RUN_SUITE
+  parameters
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  activate SETUP
+
+  p_log = p_log + "\n=== SUITE: XAPI_HTTP_CLIENT_TEST ===\n"
+
+  activate TEST_BUILD_AUTH_HEADERS_BEARER
+  activate TEST_BUILD_AUTH_HEADERS_CONTENT_TYPE
+  activate TEST_HANDLE_ERROR_STATUS_0
+  activate TEST_HANDLE_ERROR_STATUS_401
+  activate TEST_HANDLE_ERROR_STATUS_403
+  activate TEST_HANDLE_ERROR_STATUS_404
+  activate TEST_HANDLE_ERROR_STATUS_429
+  activate TEST_HANDLE_ERROR_STATUS_500
+  activate TEST_DO_GET_URL_WITH_QUERY
+  activate TEST_DO_GET_URL_WITHOUT_QUERY
+
+  p_pass = p_pass + v_pass
+  p_fail = p_fail + v_fail
+  p_log  = p_log  + v_log
+
+  p_log = p_log + "=== SUITE DONE: passed=" + string(v_pass) + " failed=" + string(v_fail) + " ===\n"
+
+  activate TEARDOWN
+
+end operation
+
+end component

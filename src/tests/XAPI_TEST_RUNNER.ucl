@@ -1,0 +1,182 @@
+; =============================================================================
+; Component : XAPI_TEST_RUNNER
+; Purpose   : Main test runner. Activates every test suite in sequence,
+;             aggregates results, and writes the final report via XAPI_LOGGER.
+;
+; Entry point:
+;   activate XAPI_TEST_RUNNER RUN_ALL (v_total, v_passed, v_failed, v_report)
+;
+; The runner opens a dedicated test log (/tmp/xapi_test_run.log) at TRACE
+; level so every assertion line is captured separately from the application log.
+;
+; Exit convention: callers check p_failed > 0 to detect failures.
+;
+; LIBPATH prerequisite (asn.ini):
+;   LIBPATH = .../src/components;.../src/tests
+;   Both directories must be on the path so Uniface resolves all component names.
+;
+; Dependencies: XAPI_LOGGER, XAPI_TEST_ASSERT (helper, no suite),
+;               XAPI_HTTP_CLIENT_MOCK (test double, no suite),
+;               XAPI_LOGGER_TEST, XAPI_HTTP_CLIENT_TEST,
+;               XAPI_TWEETS_TEST, XAPI_USERS_TEST, XAPI_CLIENT_TEST
+; =============================================================================
+component XAPI_TEST_RUNNER
+
+  ; No PUBLIC state — runner is fully driven by local variables.
+
+
+; -----------------------------------------------------------------------------
+; Operation : RUN_SUITE
+; Activates one named test suite and accumulates its results.
+; The suite component must expose:
+;   RUN_SUITE(io p_pass, io p_fail, io p_log)
+; Parameters:
+;   in  p_suite_name : component name of the test suite
+;   io  p_total      : cumulative test count
+;   io  p_passed     : cumulative pass count
+;   io  p_failed     : cumulative fail count
+;   io  p_report     : cumulative report string
+; -----------------------------------------------------------------------------
+operation RUN_SUITE
+  parameters
+    in    string  p_suite_name
+    io    numeric p_total
+    io    numeric p_passed
+    io    numeric p_failed
+    io    string  p_report
+  endparameters
+
+  variables
+    numeric v_suite_pass
+    numeric v_suite_fail
+    string  v_suite_log
+  endvariables
+
+  v_suite_pass = 0
+  v_suite_fail = 0
+  v_suite_log  = ""
+
+  trace "XAPI_TEST_RUNNER: starting suite " + p_suite_name
+
+  activate (p_suite_name) RUN_SUITE (v_suite_pass, v_suite_fail, v_suite_log)
+
+  p_passed  = p_passed  + v_suite_pass
+  p_failed  = p_failed  + v_suite_fail
+  p_total   = p_total   + v_suite_pass + v_suite_fail
+  p_report  = p_report  + v_suite_log
+
+  trace "XAPI_TEST_RUNNER: suite " + p_suite_name + " done. pass=" + string(v_suite_pass) + " fail=" + string(v_suite_fail)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : PRINT_REPORT
+; Writes the consolidated report to XAPI_LOGGER and to the trace facility.
+; Parameters:
+;   in p_report : full aggregated report string
+;   in p_passed : total passed count
+;   in p_failed : total failed count
+; -----------------------------------------------------------------------------
+operation PRINT_REPORT
+  parameters
+    in string  p_report
+    in numeric p_passed
+    in numeric p_failed
+  endparameters
+
+  variables
+    numeric v_total
+    string  v_sep
+    string  v_outcome
+    string  v_summary
+  endvariables
+
+  v_total   = p_passed + p_failed
+  v_sep     = "============================================================="
+
+  if p_failed = 0
+    v_outcome = "ALL TESTS PASSED"
+  else
+    v_outcome = "FAILURES DETECTED"
+  endif
+
+  v_summary = v_outcome + " -- total=" + string(v_total) +
+              "  passed=" + string(p_passed) +
+              "  failed=" + string(p_failed)
+
+  activate XAPI_LOGGER LOG_INFO (v_sep)
+  activate XAPI_LOGGER LOG_INFO ("XAPI TEST REPORT")
+  activate XAPI_LOGGER LOG_INFO (v_sep)
+  activate XAPI_LOGGER LOG_INFO (p_report)
+  activate XAPI_LOGGER LOG_INFO (v_sep)
+  activate XAPI_LOGGER LOG_INFO (v_summary)
+  activate XAPI_LOGGER LOG_INFO (v_sep)
+
+  trace v_sep
+  trace "XAPI TEST REPORT"
+  trace v_sep
+  trace p_report
+  trace v_sep
+  trace v_summary
+  trace v_sep
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : RUN_ALL
+; Orchestrates the full test run across all five suites.
+; Parameters:
+;   out p_total   : total number of assertions executed
+;   out p_passed  : number of passing assertions
+;   out p_failed  : number of failing assertions
+;   out p_report  : full report string
+; -----------------------------------------------------------------------------
+operation RUN_ALL
+  parameters
+    out numeric p_total
+    out numeric p_passed
+    out numeric p_failed
+    out string  p_report
+  endparameters
+
+  variables
+    numeric v_total
+    numeric v_passed
+    numeric v_failed
+    string  v_report
+    string  v_ts
+  endvariables
+
+  v_total   = 0
+  v_passed  = 0
+  v_failed  = 0
+  v_report  = ""
+  v_ts      = $datetime
+
+  ; Open dedicated test log at TRACE level (0) — captures every assertion line
+  activate XAPI_LOGGER INIT ("/tmp", "xapi_test_run.log", 0)
+
+  v_report = "XAPI Test Run started: " + v_ts + "\n"
+
+  ; --- Run all suites in dependency order ------------------------------------
+  activate RUN_SUITE ("XAPI_LOGGER_TEST",      v_total, v_passed, v_failed, v_report)
+  activate RUN_SUITE ("XAPI_HTTP_CLIENT_TEST", v_total, v_passed, v_failed, v_report)
+  activate RUN_SUITE ("XAPI_TWEETS_TEST",      v_total, v_passed, v_failed, v_report)
+  activate RUN_SUITE ("XAPI_USERS_TEST",       v_total, v_passed, v_failed, v_report)
+  activate RUN_SUITE ("XAPI_CLIENT_TEST",      v_total, v_passed, v_failed, v_report)
+
+  ; --- Write final report ----------------------------------------------------
+  activate PRINT_REPORT (v_report, v_passed, v_failed)
+
+  activate XAPI_LOGGER CLOSE_LOG
+
+  p_total   = v_total
+  p_passed  = v_passed
+  p_failed  = v_failed
+  p_report  = v_report
+
+end operation
+
+end component

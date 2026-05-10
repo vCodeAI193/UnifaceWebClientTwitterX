@@ -1,0 +1,233 @@
+; =============================================================================
+; Component : XAPI_TEST_ASSERT
+; Purpose   : Stateless assertion helper for the Uniface ProcScript test suite.
+;             Every operation appends a result line to p_log and increments
+;             either p_pass or p_fail. No PUBLIC state is used — callers own
+;             the counters so multiple suites can accumulate into a single total.
+;
+; Calling convention:
+;   activate XAPI_TEST_ASSERT ASSERT_EQUAL (
+;     "label", "expected", "actual", v_pass, v_fail, v_log)
+;
+; Dependencies: none
+; =============================================================================
+component XAPI_TEST_ASSERT
+
+  ; No PUBLIC variables — intentionally stateless.
+
+
+; -----------------------------------------------------------------------------
+; Internal helper : RECORD_PASS
+; Appends a PASS line to the log and increments the pass counter.
+; -----------------------------------------------------------------------------
+operation RECORD_PASS
+  parameters
+    in string  p_label
+    io numeric p_pass
+    io string  p_log
+  endparameters
+
+  p_pass = p_pass + 1
+  p_log  = p_log + "  [PASS] " + p_label + "\n"
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Internal helper : RECORD_FAIL
+; Appends a FAIL line with detail to the log and increments the fail counter.
+; -----------------------------------------------------------------------------
+operation RECORD_FAIL
+  parameters
+    in string  p_label
+    in string  p_detail
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  p_fail = p_fail + 1
+  p_log  = p_log + "  [FAIL] " + p_label + " -- " + p_detail + "\n"
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : ASSERT_EQUAL
+; Passes when p_expected and p_actual are identical strings (case-sensitive).
+; Parameters:
+;   in  p_label    : human-readable test label
+;   in  p_expected : expected string value
+;   in  p_actual   : actual string value
+;   io  p_pass     : pass counter
+;   io  p_fail     : fail counter
+;   io  p_log      : running log string
+; -----------------------------------------------------------------------------
+operation ASSERT_EQUAL
+  parameters
+    in string  p_label
+    in string  p_expected
+    in string  p_actual
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  variables
+    string v_detail
+  endvariables
+
+  if p_expected = p_actual
+    activate RECORD_PASS (p_label, p_pass, p_log)
+    return
+  endif
+
+  v_detail = "expected=<" + p_expected + "> actual=<" + p_actual + ">"
+  activate RECORD_FAIL (p_label, v_detail, p_fail, p_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : ASSERT_NUMERIC_EQUAL
+; Passes when expected and actual numeric values are equal.
+; -----------------------------------------------------------------------------
+operation ASSERT_NUMERIC_EQUAL
+  parameters
+    in string  p_label
+    in numeric p_expected
+    in numeric p_actual
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  variables
+    string v_detail
+  endvariables
+
+  if p_expected = p_actual
+    activate RECORD_PASS (p_label, p_pass, p_log)
+    return
+  endif
+
+  v_detail = "expected=<" + string(p_expected) + "> actual=<" + string(p_actual) + ">"
+  activate RECORD_FAIL (p_label, v_detail, p_fail, p_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : ASSERT_EMPTY
+; Passes when p_value is an empty string ("").
+; -----------------------------------------------------------------------------
+operation ASSERT_EMPTY
+  parameters
+    in string  p_label
+    in string  p_value
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  variables
+    string v_detail
+  endvariables
+
+  if p_value = ""
+    activate RECORD_PASS (p_label, p_pass, p_log)
+    return
+  endif
+
+  v_detail = "expected empty string, got=<" + p_value + ">"
+  activate RECORD_FAIL (p_label, v_detail, p_fail, p_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : ASSERT_NOT_EMPTY
+; Passes when p_value is a non-empty string.
+; -----------------------------------------------------------------------------
+operation ASSERT_NOT_EMPTY
+  parameters
+    in string  p_label
+    in string  p_value
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  if p_value != ""
+    activate RECORD_PASS (p_label, p_pass, p_log)
+    return
+  endif
+
+  activate RECORD_FAIL (p_label, "expected non-empty string, got empty", p_fail, p_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : ASSERT_CONTAINS
+; Passes when p_needle is a substring of p_haystack.
+; Uses a $substr sliding window (O(n*m)) — correct for short test strings.
+; No $instr() is used since it is not available in all Uniface versions.
+; -----------------------------------------------------------------------------
+operation ASSERT_CONTAINS
+  parameters
+    in string  p_label
+    in string  p_haystack
+    in string  p_needle
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  variables
+    numeric v_hay_len
+    numeric v_ndl_len
+    numeric v_limit
+    numeric v_i
+    string  v_window
+    string  v_detail
+    numeric v_found
+  endvariables
+
+  v_found   = 0
+  v_hay_len = $length(p_haystack)
+  v_ndl_len = $length(p_needle)
+
+  if v_ndl_len = 0
+    activate RECORD_PASS (p_label, p_pass, p_log)
+    return
+  endif
+
+  if v_ndl_len > v_hay_len
+    v_detail = "needle=<" + p_needle + "> not found in haystack=<" + p_haystack + ">"
+    activate RECORD_FAIL (p_label, v_detail, p_fail, p_log)
+    return
+  endif
+
+  v_limit = v_hay_len - v_ndl_len + 1
+  v_i     = 1
+
+  while v_i <= v_limit
+    v_window = $substr(p_haystack, v_i, v_ndl_len)
+    if v_window = p_needle
+      v_found = 1
+      v_i     = v_limit + 1
+    endif
+    v_i = v_i + 1
+  endwhile
+
+  if v_found = 1
+    activate RECORD_PASS (p_label, p_pass, p_log)
+    return
+  endif
+
+  v_detail = "needle=<" + p_needle + "> not found in haystack=<" + p_haystack + ">"
+  activate RECORD_FAIL (p_label, v_detail, p_fail, p_log)
+
+end operation
+
+end component

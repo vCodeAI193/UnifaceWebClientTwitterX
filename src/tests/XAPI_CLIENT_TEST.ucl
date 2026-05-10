@@ -1,0 +1,280 @@
+; =============================================================================
+; Component : XAPI_CLIENT_TEST
+; Purpose   : Unit test suite for XAPI_CLIENT (6 tests).
+;
+; Strategy  : XAPI_CLIENT.INITIALIZE reads a real INI file from disk.
+;             SETUP writes a minimal valid /tmp/xapi_test.ini using
+;             ProcScript file I/O so the suite is fully self-contained.
+;             Failure cases use a blank token INI or a non-existent path.
+;             XAPI_CLIENT.v_initialized is read directly as a PUBLIC variable.
+;
+; Dependencies: XAPI_CLIENT, XAPI_LOGGER, XAPI_TEST_ASSERT
+; =============================================================================
+component XAPI_CLIENT_TEST
+
+  PUBLIC numeric v_pass
+  PUBLIC numeric v_fail
+  PUBLIC string  v_log
+
+
+; -----------------------------------------------------------------------------
+; Internal : SETUP
+; Writes a minimal valid xapi_test.ini to /tmp and resets client state.
+; -----------------------------------------------------------------------------
+operation SETUP
+
+  v_pass = 0
+  v_fail = 0
+  v_log  = ""
+
+  ; Force clean state
+  activate XAPI_CLIENT SHUTDOWN
+
+  ; Write minimal valid config to /tmp
+  open TESTINI file "/tmp/xapi_test.ini" write text
+  write TESTINI "[XAPI]"
+  write TESTINI "BEARER_TOKEN = TEST_BEARER_FOR_UNIT_TEST"
+  write TESTINI "BASE_URL     = https://api.twitter.com/2"
+  write TESTINI "[LOGGING]"
+  write TESTINI "LOG_LEVEL    = 2"
+  write TESTINI "LOG_FILE     = xapi_client_test.log"
+  close TESTINI
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Internal : TEARDOWN
+; -----------------------------------------------------------------------------
+operation TEARDOWN
+
+  activate XAPI_CLIENT SHUTDOWN
+  activate XAPI_LOGGER CLOSE_LOG
+
+end operation
+
+
+; =============================================================================
+; Tests
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; TEST_INITIALIZE_MISSING_TOKEN
+; INITIALIZE with a blank BEARER_TOKEN must set p_error and leave
+; v_initialized = 0.
+; -----------------------------------------------------------------------------
+operation TEST_INITIALIZE_MISSING_TOKEN
+
+  variables
+    string v_label
+    string v_error
+  endvariables
+
+  v_label = "TEST_INITIALIZE_MISSING_TOKEN"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_CLIENT SHUTDOWN
+
+  ; Write INI with blank token
+  open NOTOKEN file "/tmp/xapi_notoken.ini" write text
+  write NOTOKEN "[XAPI]"
+  write NOTOKEN "BEARER_TOKEN ="
+  write NOTOKEN "BASE_URL     = https://api.twitter.com/2"
+  write NOTOKEN "[LOGGING]"
+  write NOTOKEN "LOG_LEVEL    = 2"
+  write NOTOKEN "LOG_FILE     = xapi_client_test.log"
+  close NOTOKEN
+
+  activate XAPI_CLIENT INITIALIZE ("/tmp/xapi_notoken.ini", v_error)
+
+  activate XAPI_TEST_ASSERT ASSERT_NOT_EMPTY (
+    v_label + ": error returned when BEARER_TOKEN missing",
+    v_error, v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_initialized remains 0",
+    0, XAPI_CLIENT.v_initialized, v_pass, v_fail, v_log)
+
+  activate TEARDOWN
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_INITIALIZE_MISSING_CONFIG
+; INITIALIZE with a non-existent file path: $getconfigkey returns "" for all
+; keys, causing the BEARER_TOKEN check to fail with an error.
+; -----------------------------------------------------------------------------
+operation TEST_INITIALIZE_MISSING_CONFIG
+
+  variables
+    string v_label
+    string v_error
+  endvariables
+
+  v_label = "TEST_INITIALIZE_MISSING_CONFIG"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_CLIENT SHUTDOWN
+
+  activate XAPI_CLIENT INITIALIZE ("/nonexistent/path/xapi.ini", v_error)
+
+  activate XAPI_TEST_ASSERT ASSERT_NOT_EMPTY (
+    v_label + ": error returned for non-existent config",
+    v_error, v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_initialized is 0 after config failure",
+    0, XAPI_CLIENT.v_initialized, v_pass, v_fail, v_log)
+
+  activate TEARDOWN
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_OPERATION_BEFORE_INIT
+; GET_TWEET before INITIALIZE must return "not initialized" in p_error.
+; -----------------------------------------------------------------------------
+operation TEST_OPERATION_BEFORE_INIT
+
+  variables
+    string  v_label
+    string  v_resp_json
+    numeric v_status
+    string  v_error
+  endvariables
+
+  v_label = "TEST_OPERATION_BEFORE_INIT"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_CLIENT SHUTDOWN
+
+  activate XAPI_CLIENT GET_TWEET ("1234567890", v_resp_json, v_status, v_error)
+
+  activate XAPI_TEST_ASSERT ASSERT_NOT_EMPTY (
+    v_label + ": GET_TWEET returns error when not initialized",
+    v_error, v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
+    v_label + ": error mentions not initialized",
+    v_error, "not initialized", v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_INITIALIZE_IDEMPOTENT
+; Calling INITIALIZE twice must succeed both times with no error and leave
+; v_initialized = 1.
+; -----------------------------------------------------------------------------
+operation TEST_INITIALIZE_IDEMPOTENT
+
+  variables
+    string v_label
+    string v_error_1
+    string v_error_2
+  endvariables
+
+  v_label = "TEST_INITIALIZE_IDEMPOTENT"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_CLIENT SHUTDOWN
+
+  activate XAPI_CLIENT INITIALIZE ("/tmp/xapi_test.ini", v_error_1)
+  activate XAPI_CLIENT INITIALIZE ("/tmp/xapi_test.ini", v_error_2)
+
+  activate XAPI_TEST_ASSERT ASSERT_EMPTY (
+    v_label + ": first INITIALIZE has no error",
+    v_error_1, v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_EMPTY (
+    v_label + ": second INITIALIZE has no error",
+    v_error_2, v_pass, v_fail, v_log)
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_initialized = 1 after double INITIALIZE",
+    1, XAPI_CLIENT.v_initialized, v_pass, v_fail, v_log)
+
+  activate TEARDOWN
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_SHUTDOWN_RESETS_FLAG
+; SHUTDOWN must set v_initialized = 0.
+; -----------------------------------------------------------------------------
+operation TEST_SHUTDOWN_RESETS_FLAG
+
+  variables
+    string v_label
+    string v_error
+  endvariables
+
+  v_label = "TEST_SHUTDOWN_RESETS_FLAG"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_CLIENT INITIALIZE ("/tmp/xapi_test.ini", v_error)
+  activate XAPI_CLIENT SHUTDOWN
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_initialized = 0 after SHUTDOWN",
+    0, XAPI_CLIENT.v_initialized, v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; TEST_SHUTDOWN_SAFE_WHEN_NOT_INIT
+; Calling SHUTDOWN on an un-initialized client must not crash.
+; -----------------------------------------------------------------------------
+operation TEST_SHUTDOWN_SAFE_WHEN_NOT_INIT
+
+  variables
+    string v_label
+  endvariables
+
+  v_label = "TEST_SHUTDOWN_SAFE_WHEN_NOT_INIT"
+  v_log   = v_log + "[TEST] " + v_label + "\n"
+
+  activate XAPI_CLIENT SHUTDOWN
+  activate XAPI_CLIENT SHUTDOWN   ; second call must be safe
+
+  activate XAPI_TEST_ASSERT ASSERT_NUMERIC_EQUAL (
+    v_label + ": v_initialized still 0 after double SHUTDOWN",
+    0, XAPI_CLIENT.v_initialized, v_pass, v_fail, v_log)
+
+end operation
+
+
+; -----------------------------------------------------------------------------
+; Operation : RUN_SUITE
+; -----------------------------------------------------------------------------
+operation RUN_SUITE
+  parameters
+    io numeric p_pass
+    io numeric p_fail
+    io string  p_log
+  endparameters
+
+  activate SETUP
+
+  p_log = p_log + "\n=== SUITE: XAPI_CLIENT_TEST ===\n"
+
+  activate TEST_INITIALIZE_MISSING_TOKEN
+  activate TEST_INITIALIZE_MISSING_CONFIG
+  activate TEST_OPERATION_BEFORE_INIT
+  activate TEST_INITIALIZE_IDEMPOTENT
+  activate TEST_SHUTDOWN_RESETS_FLAG
+  activate TEST_SHUTDOWN_SAFE_WHEN_NOT_INIT
+
+  p_pass = p_pass + v_pass
+  p_fail = p_fail + v_fail
+  p_log  = p_log  + v_log
+
+  p_log = p_log + "=== SUITE DONE: passed=" + string(v_pass) + " failed=" + string(v_fail) + " ===\n"
+
+end operation
+
+end component
