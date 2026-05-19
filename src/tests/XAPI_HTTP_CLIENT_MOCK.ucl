@@ -184,8 +184,10 @@ operation FIND_MATCH
     string  v_window
   endvariables
 
-  p_status = 404
-  p_body   = "MOCK_NO_MATCH"
+  ; 599 = deliberate sentinel for "no mock pattern matched" — distinct from
+  ; any real HTTP status so test failures are immediately recognisable.
+  p_status = 599
+  p_body   = "MOCK_NO_MATCH: no registered pattern matched path=" + p_path
 
   if v_count >= 1
     if v_path_1 != ""

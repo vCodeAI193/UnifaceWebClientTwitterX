@@ -47,11 +47,17 @@ operation INIT
     string  v_banner
   endvariables
 
-  v_log_dir   = p_log_dir
   v_min_level = p_min_level
 
+  ; Fallback: if no directory supplied, write to /tmp to avoid "//file.log"
+  if p_log_dir = ""
+    v_log_dir = "/tmp"
+  else
+    v_log_dir = p_log_dir
+  endif
+
   ; Build full path: directory + separator + filename
-  v_full_path = p_log_dir + "/" + p_log_file
+  v_full_path = v_log_dir + "/" + p_log_file
   v_log_file  = v_full_path
 
   ; Open log file in append + text mode (creates file if it does not exist)

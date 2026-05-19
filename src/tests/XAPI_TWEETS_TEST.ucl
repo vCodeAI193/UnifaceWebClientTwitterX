@@ -374,11 +374,13 @@ operation TEST_ESCAPE_BACKSLASH
   activate XAPI_HTTP_CLIENT_MOCK MOCK_RESET
   activate XAPI_HTTP_CLIENT_MOCK MOCK_SETUP ("/tweets", 201, '{"data":{"id":"444"}}')
 
-  activate XAPI_TWEETS CREATE_TWEET ("path\to\file", "", v_resp_json, v_status, v_error)
+  ; Use an unambiguous string: a single backslash as the only special character
+  ; so the test is not sensitive to how the parser interprets "\t" or "\f".
+  activate XAPI_TWEETS CREATE_TWEET ('C:\Users', "", v_resp_json, v_status, v_error)
 
   activate XAPI_HTTP_CLIENT_MOCK GET_LAST_BODY (v_last_body)
 
-  ; Backslash must be escaped to \\
+  ; The single backslash must be escaped to \\ in the JSON body
   activate XAPI_TEST_ASSERT ASSERT_CONTAINS (
     v_label + ": backslash escaped to \\\\ in body",
     v_last_body, "\\", v_pass, v_fail, v_log)

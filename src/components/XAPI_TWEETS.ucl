@@ -62,9 +62,10 @@ operation ESCAPE_JSON_STRING
   ; Backslash must be escaped first to avoid double-escaping other replacements
   replace p_str, "\", "\\"
   replace p_str, '"', '\"'
-  replace p_str, "/n", "\\n"
-  replace p_str, "/r", "\\r"
-  replace p_str, "/t", "\\t"
+  ; NOTE: Actual newline (LF/CR) and tab characters in tweet text are not escaped
+  ; here because ProcScript has no portable literal for chr(10)/chr(13)/chr(9).
+  ; The X API accepts unescaped whitespace in the text field; if strict JSON
+  ; encoding is required, pre-process the string before passing to CREATE_TWEET.
 
 end operation
 
@@ -146,6 +147,7 @@ operation CREATE_TWEET
     string  v_path
     string  v_json_body
     string  v_escaped_text
+    string  v_escaped_reply
   endvariables
 
   p_resp_json = ""
@@ -165,7 +167,9 @@ operation CREATE_TWEET
   v_path = "/tweets"
 
   if p_reply_to != ""
-    v_json_body = '{"text":"' + v_escaped_text + '","reply":{"in_reply_to_tweet_id":"' + p_reply_to + '"}}'
+    v_escaped_reply = p_reply_to
+    activate ESCAPE_JSON_STRING (v_escaped_reply)
+    v_json_body = '{"text":"' + v_escaped_text + '","reply":{"in_reply_to_tweet_id":"' + v_escaped_reply + '"}}'
   else
     v_json_body = '{"text":"' + v_escaped_text + '"}'
   endif

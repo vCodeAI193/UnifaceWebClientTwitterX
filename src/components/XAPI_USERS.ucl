@@ -126,7 +126,8 @@ operation GET_USER_BY_USERNAME
     return
   endif
 
-  ; Strip leading "@" if caller included it
+  ; Strip a single leading "@" — intentionally handles only one "@" since X
+  ; usernames cannot start with "@" and callers like DSP forms may include it.
   v_clean_name = p_username
   if $substr(v_clean_name, 1, 1) = "@"
     v_len        = $length(v_clean_name)
